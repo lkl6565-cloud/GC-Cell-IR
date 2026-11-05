@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import shutil
 from datetime import datetime
 from pathlib import Path
 import feedparser
@@ -17,11 +18,31 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 def run_kwcli_json(cmd_list):
     """
-    키움 공식 CLI를 전역 명령어(kwcli)로 안전하게 실행하고 JSON 결과를 파싱하는 함수
-    - Render(리눅스) 및 로컬 환경 모두에서 uv로 설치된 kwcli를 직접 호출합니다.
+    [데이터 소스 1순위: 키움 공식 CLI]
+    - 키움 가이드 사양(uv tool install kwcli)에 따라 설치된 실행 파일('kiwoomcli' 또는 'kwcli')을 
+      시스템 PATH 및 Render/로컬 표준 후보 경로에서 자동으로 탐색하여 실행합니다.
     """
     if cmd_list and cmd_list[0] in ["kiwoomcli", "kwcli"]:
-        cmd_list[0] = "kwcli"
+        binary_path = shutil.which("kiwoomcli") or shutil.which("kwcli")
+        
+        if not binary_path:
+            candidates = [
+                "/opt/render/.local/bin/kiwoomcli",
+                "/opt/render/.local/bin/kwcli",
+                os.path.expanduser("~/.local/bin/kiwoomcli"),
+                os.path.expanduser("~/.local/bin/kwcli"),
+                r"C:\Users\dhkim0521\.local\bin\kiwoomcli.exe",
+                r"C:\Users\dhkim0521\.local\bin\kwcli.exe"
+            ]
+            for path in candidates:
+                if os.path.exists(path):
+                    binary_path = path
+                    break
+        
+        if binary_path:
+            cmd_list[0] = binary_path
+        else:
+            cmd_list[0] = "kiwoomcli"
 
     try:
         result = subprocess.run(cmd_list, capture_output=True, text=True, check=True, encoding='utf-8')
@@ -32,7 +53,11 @@ def run_kwcli_json(cmd_list):
     return None
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    """1차: 키움 공식 CLI 주가 조회 / 2차: 실패 시 야후 파이낸스 백업"""
+    """
+    [주가 데이터 수집 파이프라인]
+    - 1차: 키움 공식 CLI 주가 조회
+    - 2차(백업): 야후 파이낸스({code}.KQ) 연동
+    """
     price, ratio, volume = "10,270", "+2.60%", "15,584"
     success = False
 
@@ -69,7 +94,11 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
-    """1차: 키움 공식 CLI 시장 지수 조회 / 2차: 실패 시 야후 파이낸스(^KS11, ^KQ11) 백업"""
+    """
+    [시장 지수 데이터 수집 파이프라인]
+    - 1차: 키움 공식 CLI 시장 지수 조회
+    - 2차(백업): 야후 파이낸스 지수(^KS11, ^KQ11) 연동
+    """
     kospi_val, kospi_ratio = "2,560.12", "+0.45%"
     kosdaq_val, kosdaq_ratio = "742.80", "+0.15%"
     kq26_val, kq26_ratio = "7,264.11", "-1.42%"
@@ -123,9 +152,9 @@ def get_market_indices_with_cli_and_fallback():
 
 def fetch_investor_data_multi_fallback(code="144510"):
     """
-    수급 수집 파이프라인:
-    1차: 키움 공식 CLI (`investor-by-stock`)
-    2차: 네이버 금융 크롤링 백업
+    [투자자별 수급 데이터 수집 파이프라인]
+    - 1차: 키움 공식 CLI (`investor-by-stock`)
+    - 2차(백업): 네이버 금융 크롤링 연동
     """
     investor = {
         "foreign": "-1,250",
@@ -206,7 +235,11 @@ def fetch_investor_data_multi_fallback(code="144510"):
     return investor
 
 def fetch_naver_news_api(query, display=3):
-    """NAVER API HUB 수집 -> 실패 시 구글 뉴스 RSS 백업"""
+    """
+    [뉴스 데이터 수집 파이프라인]
+    - 1차: NAVER API HUB 뉴스 검색
+    - 2차(백업): 구글 뉴스 RSS 피드 연동
+    """
     news_list = []
     encoded_query = requests.utils.quote(query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
@@ -382,7 +415,7 @@ def generate_data():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [정밀 반영 완료] 전역 kwcli 명령어 및 모든 데이터 소스 조건 통합 완료 ---")
+    print("--- [최종 정밀 반영 완료] 키움 가이드 사양 준수 및 모든 데이터 소스 조건 통합 완료 ---")
 
 if __name__ == "__main__":
     generate_data()
