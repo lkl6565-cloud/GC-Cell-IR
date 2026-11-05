@@ -11,6 +11,8 @@ import requests
 from email.utils import parsedate_to_datetime
 import re
 from dotenv import load_dotenv
+import http.server
+import socketserver
 
 # .env 파일 경로 명시적 지정 및 override 설정
 env_path = Path(__file__).resolve().parent / '.env'
@@ -52,11 +54,6 @@ def run_kwcli_json(cmd_list):
     return None
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    """
-    [주가 데이터 수집 파이프라인]
-    - 1차: 키움 공식 CLI (`kwcli domestic stocks info --code=144510`)
-    - 2차(백업): 야후 파이낸스 (`144510.KQ`)
-    """
     price, ratio, volume = "10,270", "+2.60%", "15,584"
     success = False
 
@@ -93,17 +90,11 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
-    """
-    [시장 지수 데이터 수집 파이프라인]
-    - 1차: 키움 공식 CLI (`kwcli domestic market index`) - 코스피, 코스닥, 제약(pharmacy) 포함
-    - 2차(백업): 야후 파이낸스 전용 티커 매핑 분리 (^KS11, ^KQ11, ^KQ26)
-    """
     kospi_val, kospi_ratio = "2,560.12", "+0.45%"
     kosdaq_val, kosdaq_ratio = "742.80", "+0.15%"
     kq26_val, kq26_ratio = "7,264.11", "-1.42%"
     success = False
 
-    # 1차: 키움 CLI 호출
     idx_data = run_kwcli_json(["kwcli", "domestic", "market", "index"])
     if idx_data:
         try:
@@ -124,13 +115,12 @@ def get_market_indices_with_cli_and_fallback():
         except Exception:
             pass
 
-    # 2차: 야후 파이낸스 백업 (전용 티커 분리 적용)
     if not success:
         try:
             yahoo_tickers = {
-                "kospi": "^KS11",    # 코스피 지수
-                "kosdaq": "^KQ11",   # 코스닥 지수
-                "pharmacy": "^KQ26"  # 코스닥 제약/바이오 섹터 지수
+                "kospi": "^KS11",
+                "kosdaq": "^KQ11",
+                "pharmacy": "^KQ26"
             }
 
             k_hist = yf.Ticker(yahoo_tickers["kospi"]).history(period="2d")
@@ -165,11 +155,6 @@ def get_market_indices_with_cli_and_fallback():
     return (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio)
 
 def fetch_investor_data_multi_fallback(code="144510"):
-    """
-    [투자자별 수급 데이터 수집 파이프라인]
-    - 1차: 키움 공식 CLI (`kwcli domestic stocks investor-by-stock`)
-    - 2차(백업): 네이버 금융 크롤링 연동
-    """
     investor = {
         "foreign": "-1,250",
         "organ": "+3,420",
@@ -249,11 +234,6 @@ def fetch_investor_data_multi_fallback(code="144510"):
     return investor
 
 def fetch_naver_news_api(query, display=3):
-    """
-    [뉴스 데이터 수집 파이프라인]
-    - 1차: NAVER API HUB 뉴스 검색
-    - 2차(백업): 구글 뉴스 RSS 피드 연동
-    """
     news_list = []
     encoded_query = requests.utils.quote(query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
@@ -319,7 +299,6 @@ def fetch_naver_news_api(query, display=3):
     return news_list[:display]
 
 def fetch_google_news_fallback(query, display=3):
-    """구글 뉴스 RSS 백업 수집"""
     news_list = []
     try:
         rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
@@ -429,7 +408,15 @@ def generate_data():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [정상 완료] 다중 소스 및 키움 CLI 통합 파이프라인 실행 완료 ---")
+    print("--- [데이터 갱신 완료] data.json 생성됨 ---")
+
+def run_server():
+    PORT = int(os.environ.get("PORT", 10000))
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        print(f"Serving HTTP on port {PORT}...")
+        httpd.serve_forever()
 
 if __name__ == "__main__":
     generate_data()
+    run_server()
