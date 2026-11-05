@@ -1,6 +1,5 @@
-flask
 requests
-beautifulsoup4
 yfinance
 feedparser
-python-dotenv
+# 선택: AI 요약을 쓸 때만 (GEMINI_API_KEY 설정 시)
+google-genai
