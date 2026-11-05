@@ -446,12 +446,14 @@ def generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_r
           3. "macro": 환율 등 거시경제 지표 영향 팩트 분석 (1~2문장)
         """
 
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.2,
-                response_mime_type="application/json"
+      response = client.models.generate_content(
+    model='gemini-3.8-flash',
+    contents=prompt,
+    config=types.GenerateContentConfig(
+        temperature=0.2,
+        response_mime_type="application/json"
+    ),
+)
             ),
         )
         
