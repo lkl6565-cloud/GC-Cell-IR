@@ -1,3 +1,4 @@
+
 import os
 from flask import Flask, render_template, jsonify
 import yfinance as yf
@@ -60,6 +61,27 @@ def index():
 
 @app.route('/api/data')
 def api_data():
+    kospi_price, kospi_rate = fetch_market_index("kospi")
+    kosdaq_price, kosdaq_rate = fetch_market_index("kosdaq")
+    
+    return jsonify({
+        "kospi": {"price": kospi_price, "rate": kospi_rate},
+        "kosdaq": {"price": kosdaq_price, "rate": kosdaq_rate}
+    })
+
+# 새로고침 버튼 및 비동기 요청을 처리하는 추가 라우트 (404 에러 방지)
+@app.route('/api/refresh', methods=['GET', 'POST'])
+def api_refresh():
+    kospi_price, kospi_rate = fetch_market_index("kospi")
+    kosdaq_price, kosdaq_rate = fetch_market_index("kosdaq")
+    
+    return jsonify({
+        "kospi": {"price": kospi_price, "rate": kospi_rate},
+        "kosdaq": {"price": kosdaq_price, "rate": kosdaq_rate}
+    })
+
+@app.route('/data.json', methods=['GET', 'POST'])
+def data_json():
     kospi_price, kospi_rate = fetch_market_index("kospi")
     kosdaq_price, kosdaq_rate = fetch_market_index("kosdaq")
     
