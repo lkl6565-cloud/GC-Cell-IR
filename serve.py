@@ -23,7 +23,11 @@ env_path = Path(__file__).resolve().parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
 class KiwoomRESTClient:
+    """
+    키움증권 REST API 공식 가이드(https://openapi.kiwoom.com) 기준 클라이언트 클래스
+    """
     def __init__(self):
+        # 공식 REST API 베이스 URL 설정
         self.base_url = "https://api.kiwoom.com"
         self.app_key = (os.getenv("KIWOOM_APPKEY") or "").strip()
         self.secret_key = (os.getenv("KIWOOM_SECRETKEY") or "").strip()
@@ -34,10 +38,11 @@ class KiwoomRESTClient:
             return self.access_token
 
         if not self.app_key or not self.secret_key:
+            print("[키움 경고]: KIWOOM_APPKEY 또는 KIWOOM_SECRETKEY가 설정되지 않았습니다.")
             return None
 
         auth_url = f"{self.base_url}/oauth2/token"
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
+        headers = {"Content-Type": "application/json; charset=utf-8"}
         payload = {
             "grant_type": "client_credentials",
             "appkey": self.app_key,
@@ -45,13 +50,13 @@ class KiwoomRESTClient:
         }
 
         try:
-            res = requests.post(auth_url, data=payload, headers=headers, timeout=3)
+            res = requests.post(auth_url, json=payload, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 self.access_token = data.get("access_token")
                 return self.access_token
             else:
-                print(f"[키움 토큰 발급 실패]: Status {res.status_code}, Res: {res.text}")
+                print(f"[키움 토큰 발급 실패]: HTTP {res.status_code} - {res.text}")
         except Exception as e:
             print(f"[키움 토큰 발급 예외]: {e}")
         return None
@@ -70,9 +75,11 @@ class KiwoomRESTClient:
         }
 
         try:
-            res = requests.get(url, headers=headers, params=params, timeout=3)
+            res = requests.get(url, headers=headers, params=params, timeout=5)
             if res.status_code == 200:
                 return res.json()
+            else:
+                print(f"[키움 API 요청 실패 ({path})]: HTTP {res.status_code} - {res.text}")
         except Exception as e:
             print(f"[키움 API 통신 예외 ({path})]: {e}")
         return None
@@ -91,14 +98,11 @@ def get_safe_yf_history(ticker_symbol, period="5d", retries=3, backoff_factor=2)
         try:
             ticker = yf.Ticker(ticker_symbol, session=session)
             hist = ticker.history(period=period)
-            if not hist.empty:
-                return hist
             return hist
         except Exception as e:
             print(f"[야후 파이낸스 요청 실패 ({ticker_symbol}), 시도 {attempt+1}/{retries}]: {e}")
             if "429" in str(e):
                 sleep_time = backoff_factor ** (attempt + 1)
-                print(f"[Rate Limit 감지]: {sleep_time}초 후 재시도합니다...")
                 time.sleep(sleep_time)
             else:
                 time.sleep(1)
@@ -113,7 +117,6 @@ def scrape_investing_index(url_path_hint):
         search_url = f"https://www.investing.com/search/?q={requests.utils.quote(url_path_hint)}"
         res = requests.get(search_url, headers=headers, timeout=4)
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, "html.parser")
             return None, None
     except Exception as e:
         print(f"[Investing.com 크롤링 예외 ({url_path_hint})]: {e}")
@@ -123,6 +126,7 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     price, ratio, volume = "0", "0.00%", "0"
     success = False
 
+    # 1순위: 키움 REST API 호출
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
     if api_data and isinstance(api_data, dict):
         try:
@@ -138,6 +142,7 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception as e:
             print(f"[키움 주가 파싱 예외]: {e}")
 
+    # 2순위: 야후 파이낸스 백업 호출
     if not success:
         try:
             hist = get_safe_yf_history(f"{code}.KQ", period="5d")
@@ -155,9 +160,6 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception as e:
             print(f"[주가 2차 검증 예외 - 야후 파이낸스]: {e}")
 
-    if not success:
-        print("[경고]: 모든 API에서 마감가 수치 호출 실패.")
-
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
@@ -167,7 +169,7 @@ def get_market_indices_with_cli_and_fallback():
     success = False
 
     idx_data = kiwoom_client.request("domestic/market/index", {"code": "120"})
-    if idx_data:
+    if idx_data and isinstance(idx_data, dict):
         try:
             if "kospi" in idx_data and "kosdaq" in idx_data:
                 kospi_val = f"{float(idx_data['kospi'].get('value', idx_data['kospi'].get('prpr', 0))):,.2f}"
@@ -217,10 +219,6 @@ def get_market_indices_with_cli_and_fallback():
                     php_chg = ((php_val - php_prev) / php_prev) * 100 if php_prev else 0.0
                     kq26_val = f"{php_val:,.2f}"
                     kq26_ratio = f"{'+' if php_chg > 0 else ''}{php_chg:.2f}%"
-            else:
-                inv_val, inv_ratio = scrape_investing_index("KQ26")
-                if inv_val:
-                    kq26_val, kq26_ratio = inv_val, inv_ratio
         except Exception as e:
             print(f"[지수 검증 예외]: {e}")
 
@@ -446,14 +444,12 @@ def generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_r
           3. "macro": 환율 등 거시경제 지표 영향 팩트 분석 (1~2문장)
         """
 
-      response = client.models.generate_content(
-    model='gemini-3.8-flash',
-    contents=prompt,
-    config=types.GenerateContentConfig(
-        temperature=0.2,
-        response_mime_type="application/json"
-    ),
-)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json"
             ),
         )
         
@@ -483,10 +479,6 @@ def generate_data():
                 np_prev = nbi_hist['Close'].iloc[-2] if len(nbi_hist) > 1 else np_val
                 np_chg = ((np_val - np_prev) / np_prev) * 100 if np_prev else 0.0
                 nbi_val, nbi_ratio = f"{np_val:,.2f}", f"{'+' if np_chg > 0 else ''}{np_chg:.2f}%"
-        else:
-            inv_nbi_val, inv_nbi_ratio = scrape_investing_index("NBI")
-            if inv_nbi_val:
-                nbi_val, nbi_ratio = inv_nbi_val, inv_nbi_ratio
 
         fx_hist = get_safe_yf_history("USDKRW=X", period="2d")
         if not fx_hist.empty:
@@ -567,12 +559,9 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "error", "message": f"Not Found: {self.path}"}, ensure_ascii=False).encode('utf-8'))
 
-class ReusableTCPServer(socketserver.TCPServer):
-    allow_reuse_address = True
-
 def run_server():
-    PORT = int(os.environ.get("PORT", 8000))
-    with ReusableTCPServer(("", PORT), CustomHandler) as httpd:
+    PORT = int(os.environ.get("PORT", 10000))
+    with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
         print(f"Serving HTTP on port {PORT}...")
         httpd.serve_forever()
 
