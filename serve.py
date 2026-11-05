@@ -1,9 +1,11 @@
 import os
 import json
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import feedparser
 import yfinance as yf
+from requests import Session
 from bs4 import BeautifulSoup
 import requests
 from email.utils import parsedate_to_datetime
@@ -75,6 +77,35 @@ class KiwoomRESTClient:
 
 kiwoom_client = KiwoomRESTClient()
 
+def get_safe_yf_history(ticker_symbol, period="5d", retries=3, backoff_factor=2):
+    """
+    해외 서버(Render 등)에서 야후 파이낸스 429 Rate Limit 우회를 위해 
+    User-Agent 헤더가 포함된 커스텀 세션을 사용하고 에러 발생 시 재시도하는 함수
+    """
+    session = Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3"
+    })
+    
+    for attempt in range(retries):
+        try:
+            ticker = yf.Ticker(ticker_symbol, session=session)
+            hist = ticker.history(period=period)
+            if not hist.empty:
+                return hist
+            return hist
+        except Exception as e:
+            print(f"[야후 파이낸스 요청 실패 ({ticker_symbol}), 시도 {attempt+1}/{retries}]: {e}")
+            if "429" in str(e):
+                sleep_time = backoff_factor ** (attempt + 1)
+                print(f"[Rate Limit 감지]: {sleep_time}초 후 재시도합니다...")
+                time.sleep(sleep_time)
+            else:
+                time.sleep(1)
+    return yf.DataFrame()
+
 def scrape_investing_index(url_path_hint):
     """
     Investing.com 크롤링 Fallback 함수 (예: KQ26 또는 NBI 등)
@@ -94,11 +125,10 @@ def scrape_investing_index(url_path_hint):
     return None, None
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    # 고정 초기값 제거 및 동적 할당 준비
     price, ratio, volume = "0", "0.00%", "0"
     success = False
 
-    # 1순위: 키움 REST API 호출 (실시간 체결가 대신 공식 장 마감 종가 'clpr' 타겟팅)
+    # 1순위: 키움 REST API 호출 (공식 장 마감 종가 'clpr' 타겟팅)
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
     if api_data and isinstance(api_data, dict):
         try:
@@ -114,11 +144,10 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception as e:
             print(f"[키움 주가 파싱 예외]: {e}")
 
-    # 2순위: 야후 파이낸스 백업 (API 실패 시 실제 호출된 최신 종가 사용)
+    # 2순위: 안전한 세션과 재시도가 적용된 야후 파이낸스 백업 호출
     if not success:
         try:
-            ticker = yf.Ticker(f"{code}.KQ")
-            hist = ticker.history(period="5d")
+            hist = get_safe_yf_history(f"{code}.KQ", period="5d")
             if not hist.empty:
                 p_val = hist['Close'].iloc[-1]
                 if p_val == p_val:
@@ -134,7 +163,7 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
             print(f"[주가 2차 검증 예외 - 야후 파이낸스]: {e}")
 
     if not success:
-        print("[경고]: 모든 API에서 마감가 수치 호출 실패. 기본 0 처리 또는 기존 유지됨")
+        print("[경고]: 모든 API에서 마감가 수치 호출 실패.")
 
     return price, ratio, volume
 
@@ -170,7 +199,7 @@ def get_market_indices_with_cli_and_fallback():
         try:
             yahoo_tickers = {"kospi": "^KS11", "kosdaq": "^KQ11", "pharmacy": "^KQ26"}
 
-            k_hist = yf.Ticker(yahoo_tickers["kospi"]).history(period="2d")
+            k_hist = get_safe_yf_history(yahoo_tickers["kospi"], period="2d")
             if not k_hist.empty:
                 kp_val = k_hist['Close'].iloc[-1]
                 if kp_val == kp_val:
@@ -179,7 +208,7 @@ def get_market_indices_with_cli_and_fallback():
                     kospi_val = f"{kp_val:,.2f}"
                     kospi_ratio = f"{'+' if kp_chg > 0 else ''}{kp_chg:.2f}%"
 
-            kq_hist = yf.Ticker(yahoo_tickers["kosdaq"]).history(period="2d")
+            kq_hist = get_safe_yf_history(yahoo_tickers["kosdaq"], period="2d")
             if not kq_hist.empty:
                 kqp_val = kq_hist['Close'].iloc[-1]
                 if kqp_val == kqp_val:
@@ -188,7 +217,7 @@ def get_market_indices_with_cli_and_fallback():
                     kosdaq_val = f"{kqp_val:,.2f}"
                     kosdaq_ratio = f"{'+' if kqp_chg > 0 else ''}{kqp_chg:.2f}%"
 
-            ph_hist = yf.Ticker(yahoo_tickers["pharmacy"]).history(period="2d")
+            ph_hist = get_safe_yf_history(yahoo_tickers["pharmacy"], period="2d")
             if not ph_hist.empty:
                 php_val = ph_hist['Close'].iloc[-1]
                 if php_val == php_val:
@@ -453,8 +482,7 @@ def generate_data():
     fx_val, fx_ratio = "1,340.38", "-2.52원"
     
     try:
-        nbi_ticker = yf.Ticker("^NBI")
-        nbi_hist = nbi_ticker.history(period="2d")
+        nbi_hist = get_safe_yf_history("^NBI", period="2d")
         if not nbi_hist.empty:
             np_val = nbi_hist['Close'].iloc[-1]
             if np_val == np_val:
@@ -466,8 +494,7 @@ def generate_data():
             if inv_nbi_val:
                 nbi_val, nbi_ratio = inv_nbi_val, inv_nbi_ratio
 
-        fx_ticker = yf.Ticker("USDKRW=X")
-        fx_hist = fx_ticker.history(period="2d")
+        fx_hist = get_safe_yf_history("USDKRW=X", period="2d")
         if not fx_hist.empty:
             fp_val = fx_hist['Close'].iloc[-1]
             if fp_val == fp_val:
