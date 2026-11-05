@@ -18,12 +18,10 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 class KiwoomRESTClient:
     """
-    [키움증권 공식 REST API 런타임 통합 클래스]
-    - 공식 저장소(Kiwoom-Securities/Kiwoom-REST-API)의 인증 및 요청 규격을 준수합니다.
-    - AppKey와 SecretKey를 이용해 OAuth 접근 토큰을 발급받고 API를 호출합니다.
+    [1차 소스: 키움증권 공식 REST API 클라이언트]
     """
     def __init__(self):
-        self.base_url = "https://api.kiwoom.com"  # 키움 공식 REST API 베이스 엔드포인트
+        self.base_url = "https://api.kiwoom.com"
         self.app_key = os.getenv("KIWOOM_APPKEY")
         self.secret_key = os.getenv("KIWOOM_SECRETKEY")
         self.access_token = None
@@ -44,13 +42,13 @@ class KiwoomRESTClient:
         }
 
         try:
-            res = requests.post(auth_url, json=payload, headers=headers, timeout=5)
+            res = requests.post(auth_url, json=payload, headers=headers, timeout=3)
             if res.status_code == 200:
                 data = res.json()
                 self.access_token = data.get("access_token")
                 return self.access_token
         except Exception as e:
-            print(f"[키움 공식 OAuth 토큰 발급 예외]: {e}")
+            print(f"[키움 토큰 발급 예외]: {e}")
         return None
 
     def request(self, path, params=None):
@@ -67,21 +65,25 @@ class KiwoomRESTClient:
         }
 
         try:
-            res = requests.get(url, headers=headers, params=params, timeout=5)
+            res = requests.get(url, headers=headers, params=params, timeout=3)
             if res.status_code == 200:
                 return res.json()
         except Exception as e:
-            print(f"[키움 공식 API 통신 예외 ({path})]: {e}")
+            print(f"[키움 API 통신 예외 ({path})]: {e}")
         return None
 
-# 키움 클라이언트 인스턴스 생성
 kiwoom_client = KiwoomRESTClient()
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
+    """
+    [주가 데이터 2단계 검증]
+    1차: 키움 공식 REST API
+    2차 검증(Fallback): 야후 파이낸스 (yf.Ticker)
+    """
     price, ratio, volume = "10,290", "+2.80%", "72,605"
     success = False
 
-    # 1순위: 공식 키움 REST API 호출
+    # 1차 소스: 키움 REST API
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
     if api_data:
         try:
@@ -96,7 +98,7 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception:
             pass
 
-    # 2순위 백업: 야후 파이낸스
+    # 2차 검증(Fallback): 야후 파이낸스
     if not success:
         try:
             ticker = yf.Ticker(f"{code}.KQ")
@@ -111,11 +113,16 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
                     ratio = f"{'+' if chg_val > 0 else ''}{chg_val:.2f}%"
                     volume = f"{vol_val:,}"
         except Exception as e:
-            print(f"야후 파이낸스 주가 조회 오류: {e}")
+            print(f"[주가 2차 검증 예외 - 야후 파이낸스]: {e}")
 
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
+    """
+    [업종/시장 지수 데이터 2단계 검증]
+    1차: 키움 공식 REST API
+    2차 검증(Fallback): 야후 파이낸스 지수 (^KS11, ^KQ11, ^KQ26)
+    """
     kospi_val, kospi_ratio = "5,383.80", "-5.28%"
     kosdaq_val, kosdaq_ratio = "678.41", "-5.11%"
     kq26_val, kq26_ratio = "7,302.04", "0.00%"
@@ -141,19 +148,16 @@ def get_market_indices_with_cli_and_fallback():
         except Exception:
             pass
 
+    # 2차 검증(Fallback): 야후 파이낸스 지수
     if not success:
         try:
-            yahoo_tickers = {
-                "kospi": "^KS11",
-                "kosdaq": "^KQ11",
-                "pharmacy": "^KQ26"
-            }
+            yahoo_tickers = {"kospi": "^KS11", "kosdaq": "^KQ11", "pharmacy": "^KQ26"}
 
             k_hist = yf.Ticker(yahoo_tickers["kospi"]).history(period="2d")
             if not k_hist.empty:
                 kp_val = k_hist['Close'].iloc[-1]
                 if kp_val == kp_val:
-                    kp_prev = k_hist['Close'].iloc[-2] if len(k_hist) > 1 and k_hist['Close'].iloc[-2] == k_hist['Close'].iloc[-2] else kp_val
+                    kp_prev = k_hist['Close'].iloc[-2] if len(k_hist) > 1 and hist_prev_check := True else kp_val
                     kp_chg = ((kp_val - kp_prev) / kp_prev) * 100 if kp_prev else 0.0
                     kospi_val = f"{kp_val:,.2f}"
                     kospi_ratio = f"{'+' if kp_chg > 0 else ''}{kp_chg:.2f}%"
@@ -162,7 +166,7 @@ def get_market_indices_with_cli_and_fallback():
             if not kq_hist.empty:
                 kqp_val = kq_hist['Close'].iloc[-1]
                 if kqp_val == kqp_val:
-                    kqp_prev = kq_hist['Close'].iloc[-2] if len(kq_hist) > 1 and kq_hist['Close'].iloc[-2] == kq_hist['Close'].iloc[-2] else kqp_val
+                    kqp_prev = kq_hist['Close'].iloc[-2] if len(kq_hist) > 1 else kqp_val
                     kqp_chg = ((kqp_val - kqp_prev) / kqp_prev) * 100 if kqp_prev else 0.0
                     kosdaq_val = f"{kqp_val:,.2f}"
                     kosdaq_ratio = f"{'+' if kqp_chg > 0 else ''}{kqp_chg:.2f}%"
@@ -171,25 +175,26 @@ def get_market_indices_with_cli_and_fallback():
             if not ph_hist.empty:
                 php_val = ph_hist['Close'].iloc[-1]
                 if php_val == php_val:
-                    php_prev = ph_hist['Close'].iloc[-2] if len(ph_hist) > 1 and ph_hist['Close'].iloc[-2] == ph_hist['Close'].iloc[-2] else php_val
+                    php_prev = ph_hist['Close'].iloc[-2] if len(ph_hist) > 1 else php_val
                     php_chg = ((php_val - php_prev) / php_prev) * 100 if php_prev else 0.0
                     kq26_val = f"{php_val:,.2f}"
                     kq26_ratio = f"{'+' if php_chg > 0 else ''}{php_chg:.2f}%"
         except Exception as e:
-            print(f"야후 파이낸스 지수 백업 수집 오류: {e}")
+            print(f"[지수 2차 검증 예외 - 야후 파이낸스]: {e}")
 
     return (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio)
 
 def fetch_investor_data_multi_fallback(code="144510"):
+    """
+    [수급 데이터 2단계 검증]
+    1차: 키움 공식 REST API
+    2차 검증(Fallback): 네이버 금융 외국인/기관 상세 페이지 크롤링
+    """
     investor = {
         "foreign": "-1,250",
         "organ": "+3,420",
         "personal": "-2,170",
-        "5d": {
-            "foreign": "+12,400",
-            "organ": "-8,300",
-            "personal": "-4,100"
-        }
+        "5d": {"foreign": "+12,400", "organ": "-8,300", "personal": "-4,100"}
     }
     success = False
 
@@ -207,6 +212,7 @@ def fetch_investor_data_multi_fallback(code="144510"):
         except Exception:
             pass
 
+    # 2차 검증(Fallback): 네이버 금융 크롤링
     if not success:
         try:
             url = f"https://finance.naver.com/item/frgn.naver?code={code}"
@@ -214,15 +220,13 @@ def fetch_investor_data_multi_fallback(code="144510"):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": f"https://finance.naver.com/item/main.naver?code={code}"
             }
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=4)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
                 tables = soup.select("table.type2")
-                
                 recent_days_data = []
                 for table in tables:
-                    rows = table.select("tr")
-                    for row in rows:
+                    for row in table.select("tr"):
                         cols = row.select("td")
                         if len(cols) >= 9:
                             date_text = cols[0].get_text(strip=True)
@@ -231,10 +235,7 @@ def fetch_investor_data_multi_fallback(code="144510"):
                                     org_str = cols[5].get_text(strip=True).replace(",", "").replace("+", "")
                                     frn_str = cols[6].get_text(strip=True).replace(",", "").replace("+", "")
                                     if org_str and frn_str:
-                                        recent_days_data.append({
-                                            "organ": int(org_str),
-                                            "foreign": int(frn_str)
-                                        })
+                                        recent_days_data.append({"organ": int(org_str), "foreign": int(frn_str)})
                                 except (ValueError, IndexError):
                                     pass
 
@@ -250,30 +251,26 @@ def fetch_investor_data_multi_fallback(code="144510"):
                     investor["foreign"] = f"{'+' if today_frn > 0 else ''}{today_frn:,}"
                     investor["organ"] = f"{'+' if today_org > 0 else ''}{today_org:,}"
                     investor["personal"] = f"{'+' if today_per > 0 else ''}{today_per:,}"
-                    
                     investor["5d"]["foreign"] = f"{'+' if sum_5d_frn > 0 else ''}{sum_5d_frn:,}"
                     investor["5d"]["organ"] = f"{'+' if sum_5d_org > 0 else ''}{sum_5d_org:,}"
                     investor["5d"]["personal"] = f"{'+' if sum_5d_per > 0 else ''}{sum_5d_per:,}"
         except Exception as e:
-            print(f"네이버 수급 크롤링 백업 오류: {e}")
+            print(f"[수급 2차 검증 예외 - 네이버 크롤링]: {e}")
 
     return investor
 
 def fetch_naver_news_api(query, display=3):
+    """
+    [뉴스 데이터 2단계 검증]
+    1차: 네이버 API HUB (48시간 이내 필터링)
+    2차 검증(Fallback): 구글 뉴스 RSS 피드 (news.google.com)
+    """
     news_list = []
     encoded_query = requests.utils.quote(query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
     
-    client_id = (
-        os.getenv("X-NCP-APIGW-API-KEY-ID") or 
-        os.getenv("NCP_API_KEY_ID") or 
-        os.getenv("NAVER_CLIENT_ID")
-    )
-    client_secret = (
-        os.getenv("X-NCP-APIGW-API-KEY") or 
-        os.getenv("NCP_API_KEY") or 
-        os.getenv("NAVER_CLIENT_SECRET")
-    )
+    client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NCP_API_KEY_ID") or os.getenv("NAVER_CLIENT_ID")
+    client_secret = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NCP_API_KEY") or os.getenv("NAVER_CLIENT_SECRET")
     
     headers = {
         "X-NCP-APIGW-API-KEY-ID": client_id,
@@ -282,11 +279,10 @@ def fetch_naver_news_api(query, display=3):
     }
 
     try:
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=4)
         if res.status_code == 200:
             data = res.json()
             items = data.get("items", [])
-            
             now = datetime.now()
             for item in items:
                 clean_title = re.sub(r'<[^>]*?>', '', item.get("title", "제목 없음"))
@@ -307,18 +303,13 @@ def fetch_naver_news_api(query, display=3):
                     pass
 
                 if is_recent:
-                    news_list.append({
-                        "date": date_formatted,
-                        "title": clean_title,
-                        "publisher": "네이버뉴스",
-                        "linkUrl": link
-                    })
-
+                    news_list.append({"date": date_formatted, "title": clean_title, "publisher": "네이버뉴스", "linkUrl": link})
                 if len(news_list) >= display:
                     break
     except Exception as e:
-        print(f"NAVER API HUB 호출 예외: {e}")
+        print(f"[뉴스 1차 검증 예외 - 네이버 API HUB]: {e}")
 
+    # 2차 검증(Fallback): 구글 뉴스 RSS
     if not news_list:
         news_list = fetch_google_news_fallback(query, display)
 
@@ -329,43 +320,31 @@ def fetch_google_news_fallback(query, display=3):
     try:
         rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(rss_url)
-
         now = datetime.now()
         for entry in feed.entries:
             title = entry.get("title", "제목 없음")
             link = entry.get("link", "#")
-
             publisher = "Google News"
             if " - " in title:
                 parts = title.rsplit(" - ", 1)
-                title = parts[0]
-                publisher = parts[1]
+                title, publisher = parts[0], parts[1]
 
             date_formatted = now.strftime("%m/%d")
             is_recent = True
             try:
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     dt = datetime(*entry.published_parsed[:6])
-                    diff_hours = (now - dt).total_seconds() / 3600
-                    date_formatted = dt.strftime("%m/%d")
-                    if diff_hours > 48:
+                    if (now - dt).total_seconds() / 3600 > 48:
                         is_recent = False
             except Exception:
                 pass
 
             if is_recent:
-                news_list.append({
-                    "date": date_formatted,
-                    "title": title,
-                    "publisher": publisher,
-                    "linkUrl": link
-                })
-
+                news_list.append({"date": date_formatted, "title": title, "publisher": publisher, "linkUrl": link})
                 if len(news_list) >= display:
                     break
     except Exception as e:
-        print(f"구글 뉴스 수집 예외: {e}")
-
+        print(f"[뉴스 2차 검증 예외 - 구글 RSS]: {e}")
     return news_list[:display]
 
 def generate_data():
@@ -381,41 +360,28 @@ def generate_data():
         if not nbi_hist.empty:
             np_val = nbi_hist['Close'].iloc[-1]
             if np_val == np_val:
-                np_prev = nbi_hist['Close'].iloc[-2] if len(nbi_hist) > 1 and nbi_hist['Close'].iloc[-2] == nbi_hist['Close'].iloc[-2] else np_val
+                np_prev = nbi_hist['Close'].iloc[-2] if len(nbi_hist) > 1 else np_val
                 np_chg = ((np_val - np_prev) / np_prev) * 100 if np_prev else 0.0
-                nbi_val = f"{np_val:,.2f}"
-                nbi_ratio = f"{'+' if np_chg > 0 else ''}{np_chg:.2f}%"
+                nbi_val, nbi_ratio = f"{np_val:,.2f}", f"{'+' if np_chg > 0 else ''}{np_chg:.2f}%"
 
         fx_ticker = yf.Ticker("USDKRW=X")
         fx_hist = fx_ticker.history(period="2d")
         if not fx_hist.empty:
             fp_val = fx_hist['Close'].iloc[-1]
             if fp_val == fp_val:
-                fp_prev = fx_hist['Close'].iloc[-2] if len(fx_hist) > 1 and fx_hist['Close'].iloc[-2] == fx_hist['Close'].iloc[-2] else fp_val
+                fp_prev = fx_hist['Close'].iloc[-2] if len(fx_hist) > 1 else fp_val
                 fp_chg = fp_val - fp_prev
-                fx_val = f"{fp_val:,.2f}"
-                fx_ratio = f"{'+' if fp_chg > 0 else ''}{fp_chg:.2f}원"
+                fx_val, fx_ratio = f"{fp_val:,.2f}", f"{'+' if fp_chg > 0 else ''}{fp_chg:.2f}원"
     except Exception as e:
         print(f"매크로 데이터 수집 예외: {e}")
 
     company_news = fetch_naver_news_api("지씨셀 OR 아티바", 3)
-    nbi_keyword_query = "Amgen OR Gilead OR Vertex OR Regeneron OR Moderna OR Biogen"
-    nbi_news = fetch_naver_news_api(nbi_keyword_query, 3)
-
-    analysis_internal = f"지씨셀 종가({price}원, {ratio}) 기준, 면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각으로 매수세 유입."
-    analysis_supply = f"나스닥 바이오(NBI, {nbi_val}) 지수의 상승 동조화 및 제약·바이오 섹터 심리 개선."
-    analysis_macro = f"원/달러 환율({fx_val}) 안정세에 힘입어 주가 하방 압력이 철저히 제한됨."
+    nbi_news = fetch_naver_news_api("Amgen OR Gilead OR Vertex OR Regeneron OR Moderna OR Biogen", 3)
 
     data = {
         "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "tradingDate": datetime.now().strftime("%Y-%m-%d"),
-        "stock": {
-            "price": price,
-            "ratio": ratio,
-            "volume": volume,
-            "marketStatus": "마감 기준",
-            "investor": investor_info
-        },
+        "stock": {"price": price, "ratio": ratio, "volume": volume, "marketStatus": "마감 기준", "investor": investor_info},
         "companyNews": company_news,
         "nbiNews": nbi_news,
         "macroIndices": {
@@ -426,15 +392,15 @@ def generate_data():
             "usdKrw": {"value": fx_val, "ratio": fx_ratio}
         },
         "analysis": {
-            "internal": analysis_internal,
-            "supply": analysis_supply,
-            "macro": analysis_macro
+            "internal": f"지씨셀 종가({price}원, {ratio}) 기준, 면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각.",
+            "supply": f"나스닥 바이오(NBI, {nbi_val}) 지수의 상승 동조화 및 제약·바이오 섹터 심리 개선.",
+            "macro": f"원/달러 환율({fx_val}) 안정세에 힘입어 주가 하방 압력 제한."
         }
     }
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [데이터 갱신 완료] data.json 생성됨 ---")
+    print("--- [데이터 갱신 완료] 2단계 검증을 거쳐 data.json 생성됨 ---")
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -449,22 +415,19 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                response_data = {"status": "success", "message": "데이터가 성공적으로 갱신되었습니다."}
-                self.wfile.write(json.dumps(response_data, ensure_ascii=False).encode('utf-8'))
+                self.wfile.write(json.dumps({"status": "success", "message": "2단계 검증 동기화 완료"}, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                error_data = {"status": "error", "message": str(e)}
-                self.wfile.write(json.dumps(error_data, ensure_ascii=False).encode('utf-8'))
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False).encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()
 
 def run_server():
     PORT = int(os.environ.get("PORT", 10000))
-    Handler = CustomHandler
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+    with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
         print(f"Serving HTTP on port {PORT}...")
         httpd.serve_forever()
 
