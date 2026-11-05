@@ -19,7 +19,6 @@ load_dotenv(dotenv_path=env_path, override=True)
 class KiwoomRESTClient:
     def __init__(self):
         self.base_url = "https://api.kiwoom.com"
-        # .strip()을 추가하여 혹시 모를 공백과 줄바꿈을 완벽히 차단합니다.
         self.app_key = (os.getenv("KIWOOM_APPKEY") or "").strip()
         self.secret_key = (os.getenv("KIWOOM_SECRETKEY") or "").strip()
         self.access_token = None
@@ -73,15 +72,9 @@ class KiwoomRESTClient:
 kiwoom_client = KiwoomRESTClient()
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    """
-    [주가 데이터 2단계 검증]
-    1차: 키움 공식 REST API
-    2차 검증(Fallback): 야후 파이낸스 (yf.Ticker)
-    """
     price, ratio, volume = "10,290", "+2.80%", "72,605"
     success = False
 
-    # 1차 소스: 키움 REST API
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
     if api_data:
         try:
@@ -96,7 +89,6 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception:
             pass
 
-    # 2차 검증(Fallback): 야후 파이낸스
     if not success:
         try:
             ticker = yf.Ticker(f"{code}.KQ")
@@ -116,11 +108,6 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
-    """
-    [업종/시장 지수 데이터 2단계 검증]
-    1차: 키움 공식 REST API
-    2차 검증(Fallback): 야후 파이낸스 지수 (^KS11, ^KQ11, ^KQ26)
-    """
     kospi_val, kospi_ratio = "5,383.80", "-5.28%"
     kosdaq_val, kosdaq_ratio = "678.41", "-5.11%"
     kq26_val, kq26_ratio = "7,302.04", "0.00%"
@@ -146,7 +133,6 @@ def get_market_indices_with_cli_and_fallback():
         except Exception:
             pass
 
-    # 2차 검증(Fallback): 야후 파이낸스 지수
     if not success:
         try:
             yahoo_tickers = {"kospi": "^KS11", "kosdaq": "^KQ11", "pharmacy": "^KQ26"}
@@ -183,11 +169,6 @@ def get_market_indices_with_cli_and_fallback():
     return (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio)
 
 def fetch_investor_data_multi_fallback(code="144510"):
-    """
-    [수급 데이터 2단계 검증]
-    1차: 키움 공식 REST API
-    2차 검증(Fallback): 네이버 금융 외국인/기관 상세 페이지 크롤링
-    """
     investor = {
         "foreign": "-1,250",
         "organ": "+3,420",
@@ -210,7 +191,6 @@ def fetch_investor_data_multi_fallback(code="144510"):
         except Exception:
             pass
 
-    # 2차 검증(Fallback): 네이버 금융 크롤링
     if not success:
         try:
             url = f"https://finance.naver.com/item/frgn.naver?code={code}"
@@ -260,11 +240,13 @@ def fetch_investor_data_multi_fallback(code="144510"):
 def fetch_naver_news_api(query, display=3):
     """
     [뉴스 데이터 2단계 검증]
-    1차: 네이버 API HUB (48시간 이내 필터링)
+    1차: 네이버 API HUB (OR 연산자 처리 및 72시간 이내 필터링 완화)
     2차 검증(Fallback): 구글 뉴스 RSS 피드 (news.google.com)
     """
     news_list = []
-    encoded_query = requests.utils.quote(query)
+    # 네이버 API는 OR 연산자를 지원하지 않으므로 첫 번째 키워드(예: 지씨셀) 추출
+    primary_query = query.split(" OR ")[0] if " OR " in query else query
+    encoded_query = requests.utils.quote(primary_query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
     
     client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID")
@@ -295,7 +277,7 @@ def fetch_naver_news_api(query, display=3):
                         dt_naive = dt.replace(tzinfo=None) if dt.tzinfo else dt
                         diff_hours = (now - dt_naive).total_seconds() / 3600
                         date_formatted = dt_naive.strftime("%m/%d")
-                        if diff_hours > 48:
+                        if diff_hours > 72:  # 72시간으로 완화하여 기사 수급 안정화
                             is_recent = False
                 except Exception:
                     pass
@@ -307,7 +289,7 @@ def fetch_naver_news_api(query, display=3):
     except Exception as e:
         print(f"[뉴스 1차 검증 예외 - 네이버 API HUB]: {e}")
 
-    # 2차 검증(Fallback): 구글 뉴스 RSS
+    # 2차 검증(Fallback): 구글 뉴스 RSS (구글은 원래 query 전달)
     if not news_list:
         news_list = fetch_google_news_fallback(query, display)
 
@@ -332,7 +314,7 @@ def fetch_google_news_fallback(query, display=3):
             try:
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     dt = datetime(*entry.published_parsed[:6])
-                    if (now - dt).total_seconds() / 3600 > 48:
+                    if (now - dt).total_seconds() / 3600 > 72:
                         is_recent = False
             except Exception:
                 pass
@@ -341,6 +323,17 @@ def fetch_google_news_fallback(query, display=3):
                 news_list.append({"date": date_formatted, "title": title, "publisher": publisher, "linkUrl": link})
                 if len(news_list) >= display:
                     break
+                    
+        # 만약 필터링 조건에 걸려 비어있다면 상위 항목으로 강제 채우기
+        if not news_list and feed.entries:
+            for entry in feed.entries[:display]:
+                title = entry.get("title", "제목 없음")
+                link = entry.get("link", "#")
+                publisher = "Google News"
+                if " - " in title:
+                    parts = title.rsplit(" - ", 1)
+                    title, publisher = parts[0], parts[1]
+                news_list.append({"date": now.strftime("%m/%d"), "title": title, "publisher": publisher, "linkUrl": link})
     except Exception as e:
         print(f"[뉴스 2차 검증 예외 - 구글 RSS]: {e}")
     return news_list[:display]
