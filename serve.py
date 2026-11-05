@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import feedparser
 import yfinance as yf
@@ -84,14 +84,10 @@ def scrape_investing_index(url_path_hint):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept-Language": "ko-KR,ko;q=0.9"
         }
-        # 예시용 범용 검색 또는 직접 URL 매핑 구조 구현
-        # 실제 환경에 맞추어 인베스팅닷컴 세부 파싱 로직 적용
         search_url = f"https://www.investing.com/search/?q={requests.utils.quote(url_path_hint)}"
         res = requests.get(search_url, headers=headers, timeout=4)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
-            # 첫 번째 검색 결과 링크 추출 후 파싱 로직 수행 등 연동 가능
-            # 여기서는 기본 구조 체계를 잡아둠
             return None, None
     except Exception as e:
         print(f"[Investing.com 크롤링 예외 ({url_path_hint})]: {e}")
@@ -139,7 +135,6 @@ def get_market_indices_with_cli_and_fallback():
     kq26_val, kq26_ratio = "7,302.04", "0.00%"
     success = False
 
-    # 키움 API에서 KQ26(업종코드 120) 포함 지수 조회 시도
     idx_data = kiwoom_client.request("domestic/market/index", {"market_type": "pharmacy", "code": "120"})
     if idx_data:
         try:
@@ -161,7 +156,6 @@ def get_market_indices_with_cli_and_fallback():
         except Exception:
             pass
 
-    # 키움 호출 실패 시 야후 파이낸스 우선 시도, 실패 시 Investing.com Fallback
     if not success:
         try:
             yahoo_tickers = {"kospi": "^KS11", "kosdaq": "^KQ11", "pharmacy": "^KQ26"}
@@ -193,7 +187,6 @@ def get_market_indices_with_cli_and_fallback():
                     kq26_val = f"{php_val:,.2f}"
                     kq26_ratio = f"{'+' if php_chg > 0 else ''}{php_chg:.2f}%"
             else:
-                # 야후 실패 시 Investing.com Fallback
                 inv_val, inv_ratio = scrape_investing_index("KQ26")
                 if inv_val:
                     kq26_val, kq26_ratio = inv_val, inv_ratio
@@ -272,17 +265,11 @@ def fetch_investor_data_multi_fallback(code="144510"):
     return investor
 
 def fetch_naver_news_api(query, display=3):
-    """
-    네이버 뉴스 검색: 신규 NAVER API HUB 주소를 먼저 시도하고,
-    인증 거부 또는 실패 시 기존 구 주소로 재시도
-    """
     news_list = []
     primary_query = query.split(" OR ")[0] if " OR " in query else query
     encoded_query = requests.utils.quote(primary_query)
     
-    # 1순위: 신규 NAVER API HUB 주소
     api_hub_url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
-    # 2순위: 기존 구 주소 (Naver Open API 공식 엔드포인트)
     legacy_url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display=10&sort=date"
     
     client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID") or os.getenv("NAVER_CLIENT_ID_LEGACY")
@@ -293,13 +280,15 @@ def fetch_naver_news_api(query, display=3):
         (legacy_url, {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret})
     ]
 
+    KST = timezone(timedelta(hours=9))
+
     for target_url, headers in urls_to_try:
         try:
             res = requests.get(target_url, headers=headers, timeout=4)
             if res.status_code == 200:
                 data = res.json()
                 items = data.get("items", [])
-                now = datetime.now()
+                now = datetime.now(KST)
                 for item in items:
                     clean_title = re.sub(r'<[^>]*?>', '', item.get("title", "제목 없음"))
                     link = item.get("link", "#")
@@ -310,9 +299,9 @@ def fetch_naver_news_api(query, display=3):
                     try:
                         dt = parsedate_to_datetime(pub_date_str)
                         if dt:
-                            dt_naive = dt.replace(tzinfo=None) if dt.tzinfo else dt
-                            diff_hours = (now - dt_naive).total_seconds() / 3600
-                            date_formatted = dt_naive.strftime("%m/%d")
+                            dt_kst = dt.astimezone(KST) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(KST)
+                            diff_hours = (now - dt_kst).total_seconds() / 3600
+                            date_formatted = dt_kst.strftime("%m/%d")
                             if diff_hours > 72:
                                 is_recent = False
                     except Exception:
@@ -337,7 +326,8 @@ def fetch_google_news_fallback(query, display=3):
     try:
         rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
         feed = feedparser.parse(rss_url)
-        now = datetime.now()
+        KST = timezone(timedelta(hours=9))
+        now = datetime.now(KST)
         for entry in feed.entries:
             title = entry.get("title", "제목 없음")
             link = entry.get("link", "#")
@@ -355,15 +345,12 @@ def fetch_google_news_fallback(query, display=3):
     return news_list[:display]
 
 def fetch_nbi_news_multi_source(display=3):
-    """
-    NBI 뉴스: .env의 NBI_NEWS_ORDER 설정에 따라 순서를 바꿀 수 있으며,
-    앞 출처가 모자라면 다음 출처로 채움 (기본 순서: 야후, Investing.com, 구글)
-    """
     order_env = os.getenv("NBI_NEWS_ORDER", "yahoo,investing,google")
     sources = [s.strip().lower() for s in order_env.split(",")]
     
     collected_news = []
     query = "Nasdaq Biotechnology Index OR NBI stock news"
+    KST = timezone(timedelta(hours=9))
 
     for src in sources:
         if len(collected_news) >= display:
@@ -372,10 +359,9 @@ def fetch_nbi_news_multi_source(display=3):
         temp_list = []
         if src == "yahoo":
             try:
-                # 야후 파이낸스 관련 RSS 또는 검색 연동
                 rss_url = f"https://finance.yahoo.com/rss/headline?s=^NBI"
                 feed = feedparser.parse(rss_url)
-                now = datetime.now()
+                now = datetime.now(KST)
                 for entry in feed.entries:
                     temp_list.append({
                         "date": now.strftime("%m/%d"),
@@ -387,10 +373,9 @@ def fetch_nbi_news_multi_source(display=3):
                 pass
         elif src == "investing":
             try:
-                # Investing.com RSS/스크래핑 Fallback
                 rss_url = f"https://www.investing.com/rss/news_25.rss"
                 feed = feedparser.parse(rss_url)
-                now = datetime.now()
+                now = datetime.now(KST)
                 for entry in feed.entries:
                     temp_list.append({
                         "date": now.strftime("%m/%d"),
@@ -409,7 +394,6 @@ def fetch_nbi_news_multi_source(display=3):
             if len(collected_news) >= display:
                 break
 
-    # 부족할 경우 일반 구글 뉴스 검색으로 최종 보완
     if len(collected_news) < display:
         extra = fetch_google_news_fallback(query, display - len(collected_news))
         for item in extra:
@@ -419,10 +403,6 @@ def fetch_nbi_news_multi_source(display=3):
     return collected_news[:display]
 
 def generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_ratio, fx_val, fx_ratio, company_news):
-    """
-    GEMINI_API_KEY가 있으면 수집된 실제 데이터만 근거로 IR 톤 분석을 생성하고 "AI 요약" 표시,
-    키가 없으면 순수 수치 기반 자동 집계 문구로 대체
-    """
     default_analysis = {
         "is_ai": False,
         "internal": f"지씨셀 종가 {price}원({ratio}), 거래량 {volume}주 기록. 기관 및 외국인 수급 변동에 따른 실시간 주가 흐름 전개.",
@@ -482,7 +462,6 @@ def generate_data():
     nbi_val, nbi_ratio = "7,463.68", "+2.71%"
     fx_val, fx_ratio = "1,340.38", "-2.52원"
     
-    # NBI 지수: 야후 우선, 실패 시 Investing.com Fallback
     try:
         nbi_ticker = yf.Ticker("^NBI")
         nbi_hist = nbi_ticker.history(period="2d")
@@ -508,7 +487,6 @@ def generate_data():
     except Exception as e:
         print(f"매크로 데이터 수집 예외: {e}")
 
-    # 지씨셀 뉴스: "지씨셀"과 "아티바"를 각각 검색하여 통합 후 최신순 3건 구성
     news_gc = fetch_naver_news_api("지씨셀", 3)
     news_artiva = fetch_naver_news_api("아티바", 3)
     
@@ -520,16 +498,16 @@ def generate_data():
             combined_company_news.append(item)
     company_news = combined_company_news[:3]
 
-    # NBI 뉴스 다중 소스 로직 적용
     nbi_news = fetch_nbi_news_multi_source(3)
 
-    # Gemini API 또는 기본 수치 기반 분석 생성
     analysis_data = generate_gemini_analysis(
         price, ratio, volume, investor_info, 
         nbi_val, nbi_ratio, fx_val, fx_ratio, company_news
     )
 
-    now_dt = datetime.now()
+    # 한국 시간(KST, UTC+9) 적용
+    KST = timezone(timedelta(hours=9))
+    now_dt = datetime.now(KST)
     mm_dd_str = now_dt.strftime("%m/%d")
 
     data = {
@@ -551,7 +529,7 @@ def generate_data():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [데이터 갱신 완료] 모든 조건이 반영된 data.json이 생성되었습니다 ---")
+    print("--- [데이터 갱신 완료] KST 시간이 반영된 data.json이 생성되었습니다 ---")
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
