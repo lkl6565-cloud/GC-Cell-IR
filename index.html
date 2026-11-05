@@ -298,7 +298,52 @@
             const el = $(id);
             if (!el) return;
             el.textContent = (v === undefined || v === null || v === '') ? '-' : String(v);
-            el.className = `${base} ${toneClass(v)}`; }  function safeUrl(u) { try { const url = new URL(u); return (url.protocol === 'http:' \vert{}\vert{} url.protocol === 'https:') ? url.href : '#'; } catch (_) { return '#'; } }  function formatDateToMMDD(dateStr) { if (!dateStr) return '00/00'; let s = String(dateStr).trim(); let match = s.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})$/); if (match) { let m = match[2].padStart(2, '0'); let d = match[3].padStart(2, '0'); return `${m}/${d}`; } match = s.match(/^(\d{1,2})[-./](\d{1,2})$/); if (match) { let m = match[1].padStart(2, '0'); let d = match[2].padStart(2, '0'); return `${m}/${d}`; } return s.length >= 5 ? s.substring(s.length - 5) : '11/04'; }  function renderNews(containerId, items, badgeColor) { const box = $(containerId); box.replaceChildren(); if (!Array.isArray(items) \vert{}\vert{} items.length === 0) { const empty = document.createElement('div'); empty.className = 'bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-500 text-center text-[11px]'; empty.textContent = '최근 뉴스가 없습니다.'; box.appendChild(empty); return; } items.slice(0, 3).forEach((item) => { const card = document.createElement('div'); card.className = 'bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 hover:border-zinc-700 transition-all'; const row = document.createElement('div'); row.className = 'flex items-center gap-2';  const badge = document.createElement('span'); badge.className = `px-1.5 py-0.5 text-[9px] bg-zinc-800 ${badgeColor} font-mono rounded shrink-0`;
+            el.className = `${base} ${toneClass(v)}`;
+        }
+
+        function safeUrl(u) {
+            try {
+                const url = new URL(u);
+                return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '#';
+            } catch (_) { return '#'; }
+        }
+
+        function formatDateToMMDD(dateStr) {
+            if (!dateStr) return '00/00';
+            let s = String(dateStr).trim();
+            let match = s.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})$/);
+            if (match) {
+                let m = match[2].padStart(2, '0');
+                let d = match[3].padStart(2, '0');
+                return `${m}/${d}`;
+            }
+            match = s.match(/^(\d{1,2})[-./](\d{1,2})$/);
+            if (match) {
+                let m = match[1].padStart(2, '0');
+                let d = match[2].padStart(2, '0');
+                return `${m}/${d}`;
+            }
+            return s.length >= 5 ? s.substring(s.length - 5) : '11/04';
+        }
+
+        function renderNews(containerId, items, badgeColor) {
+            const box = $(containerId);
+            box.replaceChildren();
+            if (!Array.isArray(items) || items.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-500 text-center text-[11px]';
+                empty.textContent = '최근 뉴스가 없습니다.';
+                box.appendChild(empty);
+                return;
+            }
+            items.slice(0, 3).forEach((item) => {
+                const card = document.createElement('div');
+                card.className = 'bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 hover:border-zinc-700 transition-all';
+                const row = document.createElement('div');
+                row.className = 'flex items-center gap-2';
+
+                const badge = document.createElement('span');
+                badge.className = `px-1.5 py-0.5 text-[9px] bg-zinc-800 ${badgeColor} font-mono rounded shrink-0`;
                 
                 const formattedDate = formatDateToMMDD(item.date);
                 badge.textContent = `[${formattedDate}]`;
@@ -312,7 +357,19 @@
 
                 const pub = document.createElement('span');
                 pub.className = 'text-zinc-500 font-normal';
-                pub.textContent = ` (${item.publisher \vert{}\vert{} '뉴스'})`; a.appendChild(pub);  row.append(badge, a); card.appendChild(row); box.appendChild(card); }); }  function setStatus(ok, text) { setText('update-timestamp', text); const dot = $('status-dot'); if (dot) dot.className = `w-1.5 h-1.5 rounded-full ${ok ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`;
+                pub.textContent = ` (${item.publisher || '뉴스'})`;
+                a.appendChild(pub);
+
+                row.append(badge, a);
+                card.appendChild(row);
+                box.appendChild(card);
+            });
+        }
+
+        function setStatus(ok, text) {
+            setText('update-timestamp', text);
+            const dot = $('status-dot');
+            if (dot) dot.className = `w-1.5 h-1.5 rounded-full ${ok ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`;
         }
 
         async function getJson(url, timeoutMs) {
@@ -320,7 +377,20 @@
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const res = await fetch(`${url}?_=${Date.now()}`, { signal: controller.signal, cache: 'no-store' });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`); return await res.json(); } finally { clearTimeout(timer); } }  async function postJson(url, timeoutMs) { const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); try { const res = await fetch(url, { method: 'POST', signal: controller.signal, cache: 'no-store' }); if (!res.ok) { let msg = `HTTP ${res.status}`;
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.json();
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        async function postJson(url, timeoutMs) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const res = await fetch(url, { method: 'POST', signal: controller.signal, cache: 'no-store' });
+                if (!res.ok) {
+                    let msg = `HTTP ${res.status}`;
                     try { msg = (await res.json()).error || msg; } catch (_) {}
                     throw new Error(msg);
                 }
@@ -330,7 +400,6 @@
             }
         }
 
-        // [수정 포인트] 최초 접속 시 무거운 POST 대신 data.json을 즉시 불러와 렌더링하도록 변경
         async function fetchLiveData(manual = false) {
             const btn = $('btn-refresh');
             const icon = $('refresh-icon');
@@ -348,11 +417,21 @@
             } catch (err) {
                 console.warn('데이터 로드 실패:', err);
                 try {
-                    // 수동 새로고침 중 실패했거나 자동 로드 실패 시 data.json 재시도
                     store = await getJson(DATA_URL, 10000);
                     render(store);
                 } catch (e) {
-                    setStatus(false, `데이터 로드 실패: ${err.message}`); } } finally { if (icon) icon.classList.remove('spin-animation'); if (btn) btn.disabled = false; } }  function render(d) { let fresh = true; if (d.tradingDate) { const age = (Date.now() - new Date(`${d.tradingDate}T00:00:00+09:00`).getTime()) / 86400000;
+                    setStatus(false, `데이터 로드 실패: ${err.message}`);
+                }
+            } finally {
+                if (icon) icon.classList.remove('spin-animation');
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function render(d) {
+            let fresh = true;
+            if (d.tradingDate) {
+                const age = (Date.now() - new Date(`${d.tradingDate}T00:00:00+09:00`).getTime()) / 86400000;
                 fresh = age <= STALE_DAYS;
             }
             setStatus(fresh, `${fresh ? '동기화 완료' : '오래된 데이터'}: ${d.updatedAt || d.tradingDate || '-'}`);
@@ -360,7 +439,7 @@
             const s = d.stock || {};
             setText('stock-price', s.price);
             setTone('stock-ratio', s.ratio, 'text-sm font-bold');
-            if (s.volume) setText('stock-volume-desc', `거래량 ${s.volume} ·${s.marketStatus || '마감 기준'}`);
+            if (s.volume) setText('stock-volume-desc', `거래량 ${s.volume} · ${s.marketStatus || '마감 기준'}`);
 
             const inv = s.investor;
             const invBase = 'py-2 px-2.5 text-right font-bold';
@@ -412,4 +491,53 @@
             const list = (items) => (items && items.length)
                 ? items.slice(0, 3).map((n, i) => {
                     const formattedDate = formatDateToMMDD(n.date);
-                    return `    ${i + 1}. [${formattedDate}] ${n.title} (${n
+                    return `    ${i + 1}. [${formattedDate}] ${n.title} (${n.publisher || '뉴스'})\n      ${n.linkUrl || ''}`;
+                }).join('\n')
+                : '    최근 뉴스 없음';
+
+            const body =
+`[지씨셀 IR 데일리 브리핑 및 주가변동 3대 요인 리포트]
+====================================
+기준: ${d.updatedAt || '-'}
+
+1. [지씨셀 수급 및 주가]
+   - 주가: ${s.price || '-'} (${s.ratio || '-'})
+   - 거래량: ${s.volume || '-'}
+   - 외국인 순매수: ${inv.foreign || '-'} (5일 ${f5.foreign || '-'})
+   - 기관 순매수: ${inv.organ || '-'} (5일 ${f5.organ || '-'})
+   - 개인 순매수: ${inv.personal || '-'} (5일 ${f5.personal || '-'})
+
+2. [금일 주요 이슈 뉴스 (3선)]
+${list(d.companyNews)}
+
+3. [IR 주가변동 3대 핵심 요인 분석]
+   - 1. 기사 기반 기업 측면: ${a.internal || '면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각으로 매수세 유입됨.'}
+   - 2. 업계 기반 (코스닥제약/NBI): ${a.supply || '나스닥 바이오(NBI) 및 코스닥 제약 섹터 전반의 투자 심리 개선으로 동조화 상승함.'}
+   - 3. 매크로 기반 (증시/환율): ${a.macro || '원/달러 환율 안정세 및 외국인 수급 환경 개선으로 하방 압력 제한됨.'}
+
+4. [업종 지수 및 매크로 지표]
+   - 나스닥 바이오(NBI): ${v(m.nbi)} (${v(m.nbi, 'ratio')})
+   - 코스닥 제약(KQ26): ${v(m.kq26)} (${v(m.kq26, 'ratio')})
+   - 코스피: ${v(m.kospi)} (${v(m.kospi, 'ratio')})
+   - 코스닥: ${v(m.kosdaq)} (${v(m.kosdaq, 'ratio')})
+   - 원/달러: ${v(m.usdKrw)} (${(m.usdKrw && (m.usdKrw.change || m.usdKrw.ratio)) || '-'})
+
+5. [NBI 포함 주요 종목 뉴스 (3선)]
+${list(d.nbiNews)}
+
+====================================
+지씨셀 IR 데일리 브리핑 대시보드에서 생성되었습니다.`;
+
+            const link = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            const tmp = document.createElement('a');
+            tmp.href = link;
+            document.body.appendChild(tmp);
+            tmp.click();
+            document.body.removeChild(tmp);
+            closeEmailModal();
+        }
+
+        window.addEventListener('DOMContentLoaded', () => fetchLiveData(false));
+    </script>
+</body>
+</html>
