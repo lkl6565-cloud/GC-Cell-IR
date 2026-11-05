@@ -17,13 +17,11 @@ env_path = Path(__file__).resolve().parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
 class KiwoomRESTClient:
-    """
-    [1차 소스: 키움증권 공식 REST API 클라이언트]
-    """
     def __init__(self):
         self.base_url = "https://api.kiwoom.com"
-        self.app_key = os.getenv("KIWOOM_APPKEY")
-        self.secret_key = os.getenv("KIWOOM_SECRETKEY")
+        # .strip()을 추가하여 혹시 모를 공백과 줄바꿈을 완벽히 차단합니다.
+        self.app_key = (os.getenv("KIWOOM_APPKEY") or "").strip()
+        self.secret_key = (os.getenv("KIWOOM_SECRETKEY") or "").strip()
         self.access_token = None
 
     def get_token(self):
