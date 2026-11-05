@@ -429,7 +429,7 @@ def generate_data():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [최종 완벽 반영 완료] 키움 CLI 가이드 사양 및 다중 소스 조건 통합 완료 ---")
+    print("--- [정상 완료] 다중 소스 및 키움 CLI 통합 파이프라인 실행 완료 ---")
 
 if __name__ == "__main__":
     generate_data()
