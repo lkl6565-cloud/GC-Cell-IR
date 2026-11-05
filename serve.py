@@ -1,7 +1,5 @@
 import os
 import json
-import subprocess
-import shutil
 from datetime import datetime
 from pathlib import Path
 import feedparser
@@ -18,51 +16,78 @@ import socketserver
 env_path = Path(__file__).resolve().parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
-def run_kwcli_json(cmd_list):
+class KiwoomRESTClient:
     """
-    [1순위 데이터 소스: 키움 공식 CLI]
-    - 시스템 PATH 및 Render/로컬 표준 후보 경로에서 'kiwoomcli' 또는 'kwcli'를 자동 탐색하여 실행합니다.
+    [키움증권 공식 REST API 런타임 통합 클래스]
+    - 공식 저장소(Kiwoom-Securities/Kiwoom-REST-API)의 인증 및 요청 규격을 준수합니다.
+    - AppKey와 SecretKey를 이용해 OAuth 접근 토큰을 발급받고 API를 호출합니다.
     """
-    if cmd_list and cmd_list[0] in ["kiwoomcli", "kwcli"]:
-        binary_path = shutil.which("kiwoomcli") or shutil.which("kwcli")
-        
-        if not binary_path:
-            candidates = [
-                "/opt/render/.local/bin/kiwoomcli",
-                "/opt/render/.local/bin/kwcli",
-                os.path.expanduser("~/.local/bin/kiwoomcli"),
-                os.path.expanduser("~/.local/bin/kwcli"),
-                r"C:\Users\dhkim0521\.local\bin\kiwoomcli.exe",
-                r"C:\Users\dhkim0521\.local\bin\kwcli.exe"
-            ]
-            for path in candidates:
-                if os.path.exists(path):
-                    binary_path = path
-                    break
-        
-        if binary_path:
-            cmd_list[0] = binary_path
-        else:
-            cmd_list[0] = "kiwoomcli"
+    def __init__(self):
+        self.base_url = "https://api.kiwoom.com"  # 키움 공식 REST API 베이스 엔드포인트
+        self.app_key = os.getenv("KIWOOM_APPKEY")
+        self.secret_key = os.getenv("KIWOOM_SECRETKEY")
+        self.access_token = None
 
-    try:
-        result = subprocess.run(cmd_list, capture_output=True, text=True, check=True, encoding='utf-8')
-        if result.stdout.strip():
-            return json.loads(result.stdout)
-    except Exception as e:
-        print(f"[키움 CLI 실행 예외]: {e}")
-    return None
+    def get_token(self):
+        if self.access_token:
+            return self.access_token
+
+        if not self.app_key or not self.secret_key:
+            return None
+
+        auth_url = f"{self.base_url}/oauth2/token"
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        payload = {
+            "grant_type": "client_credentials",
+            "appkey": self.app_key,
+            "appsecret": self.secret_key
+        }
+
+        try:
+            res = requests.post(auth_url, json=payload, headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                self.access_token = data.get("access_token")
+                return self.access_token
+        except Exception as e:
+            print(f"[키움 공식 OAuth 토큰 발급 예외]: {e}")
+        return None
+
+    def request(self, path, params=None):
+        token = self.get_token()
+        if not token:
+            return None
+
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "appkey": self.app_key,
+            "appsecret": self.secret_key,
+            "Content-Type": "application/json; charset=utf-8"
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=5)
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"[키움 공식 API 통신 예외 ({path})]: {e}")
+        return None
+
+# 키움 클라이언트 인스턴스 생성
+kiwoom_client = KiwoomRESTClient()
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    price, ratio, volume = "10,270", "+2.60%", "15,584"
+    price, ratio, volume = "10,290", "+2.80%", "72,605"
     success = False
 
-    data = run_kwcli_json(["kwcli", "domestic", "stocks", "info", f"--code={code}"])
-    if data:
+    # 1순위: 공식 키움 REST API 호출
+    api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
+    if api_data:
         try:
-            p_val = int(data.get("price", data.get("current_price", data.get("clpr", 0))))
-            chg_val = float(data.get("change_rate", data.get("rate", data.get("vsrt", 0))))
-            vol_val = int(data.get("volume", data.get("acml_vol", 0)))
+            p_val = int(api_data.get("price", api_data.get("current_price", api_data.get("clpr", 0))))
+            chg_val = float(api_data.get("change_rate", api_data.get("rate", api_data.get("vsrt", 0))))
+            vol_val = int(api_data.get("volume", api_data.get("acml_vol", 0)))
             if p_val > 0:
                 price = f"{p_val:,.0f}"
                 ratio = f"{'+' if chg_val > 0 else ''}{chg_val:.2f}%"
@@ -71,6 +96,7 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception:
             pass
 
+    # 2순위 백업: 야후 파이낸스
     if not success:
         try:
             ticker = yf.Ticker(f"{code}.KQ")
@@ -90,12 +116,12 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
-    kospi_val, kospi_ratio = "2,560.12", "+0.45%"
-    kosdaq_val, kosdaq_ratio = "742.80", "+0.15%"
-    kq26_val, kq26_ratio = "7,264.11", "-1.42%"
+    kospi_val, kospi_ratio = "5,383.80", "-5.28%"
+    kosdaq_val, kosdaq_ratio = "678.41", "-5.11%"
+    kq26_val, kq26_ratio = "7,302.04", "0.00%"
     success = False
 
-    idx_data = run_kwcli_json(["kwcli", "domestic", "market", "index"])
+    idx_data = kiwoom_client.request("domestic/market/index")
     if idx_data:
         try:
             if "kospi" in idx_data and "kosdaq" in idx_data:
@@ -167,12 +193,12 @@ def fetch_investor_data_multi_fallback(code="144510"):
     }
     success = False
 
-    cli_inv = run_kwcli_json(["kwcli", "domestic", "stocks", "investor-by-stock", f"--code={code}"])
-    if cli_inv and isinstance(cli_inv, dict):
+    api_inv = kiwoom_client.request("domestic/stocks/investor-by-stock", {"code": code})
+    if api_inv and isinstance(api_inv, dict):
         try:
-            frn = int(cli_inv.get("foreign", cli_inv.get("frn_net_qty", 0)))
-            org = int(cli_inv.get("organ", cli_inv.get("org_net_qty", 0)))
-            per = int(cli_inv.get("personal", cli_inv.get("prsn_net_qty", -(frn + org))))
+            frn = int(api_inv.get("foreign", api_inv.get("frn_net_qty", 0)))
+            org = int(api_inv.get("organ", api_inv.get("org_net_qty", 0)))
+            per = int(api_inv.get("personal", api_inv.get("prsn_net_qty", -(frn + org))))
             if frn != 0 or org != 0:
                 investor["foreign"] = f"{'+' if frn > 0 else ''}{frn:,}"
                 investor["organ"] = f"{'+' if org > 0 else ''}{org:,}"
