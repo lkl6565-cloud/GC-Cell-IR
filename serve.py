@@ -267,8 +267,8 @@ def fetch_naver_news_api(query, display=3):
     encoded_query = requests.utils.quote(query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
     
-    client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NCP_API_KEY_ID") or os.getenv("NAVER_CLIENT_ID")
-    client_secret = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NCP_API_KEY") or os.getenv("NAVER_CLIENT_SECRET")
+    client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID")
+    client_secret = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NAVER_CLIENT_SECRET")
     
     headers = {
         "X-NCP-APIGW-API-KEY-ID": client_id,
