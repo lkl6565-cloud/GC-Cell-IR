@@ -1,78 +1,73 @@
-import http.server
-import socketserver
 import os
-import subprocess
-import json
-from dotenv import load_dotenv
+from flask import Flask, render_template, jsonify
+import yfinance as yf
+# 키움 API 관련 모듈이나 클라이언트가 있다면 이곳에 임포트하세요.
+# from kwcli import KiwoomClient 
 
-load_dotenv()
-appkey = os.getenv("KIWOOM_APPKEY")
-secretkey = os.getenv("KIWOOM_SECRETKEY")
+app = Flask(__name__)
 
-PORT = 8765
+# 키움 클라이언트 초기화 (필요시 활성화)
+# kiwoom = KiwoomClient()
 
-class IRDashboardHandler(http.server.SimpleHTTPRequestHandler):
-    def do_POST(self):
-        if self.path == '/api/refresh':
-            try:
-                # report.py를 실행하여 data.json 갱신
-                subprocess.run(["python", "report.py"], check=True)
-                
-                if os.path.exists("data.json"):
-                    with open("data.json", "r", encoding="utf-8") as f:
-                        content = f.read()
-                    self.send_response(200)
-                    self.send_header("Content-type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(content.encode('utf-8'))
-                    return
-                else:
-                    self.send_response(500)
-                    self.send_header("Content-type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "data.json 파일 생성 실패"}).encode('utf-8'))
-                    return
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-                return
-        else:
-            self.send_error(404, "Not Found")
+def fetch_market_index(market_type="kospi"):
+    """
+    1차로 키움증권 API에서 지수를 가져오고, 
+    실패하거나 데이터가 없으면 2차로 야후 파이낸스(Fallback)에서 가져옵니다.
+    - 코스피: 키움 '001' / 야후 '^KS11'
+    - 코스닥: 키움 '101' / 야후 '^KQ11'
+    """
+    # 1단계: 키움증권 API 호출 시도
+    try:
+        kiwoom_code = "001" if market_type == "kospi" else "101"
+        
+        # [키움 API 연동 구간]
+        # kiwoom_res = kiwoom.get_market_index(kiwoom_code)
+        # if kiwoom_res and 'price' in kiwoom_res:
+        #     return float(kiwoom_res['price']), float(kiwoom_res['change_rate'])
+        
+        # 현재 키움 호출부 미연결 상태이므로 예외를 발생시켜 야후 Fallback으로 유도
+        raise Exception("키움 API 지수 조회 미연결 또는 응답 없음")
 
-    def do_GET(self):
-        if self.path == '/' or self.path == '/index.html':
-            if os.path.exists("index.html"):
-                self.send_response(200)
-                self.send_header("Content-type", "text/html; charset=utf-8")
-                self.end_headers()
-                with open("index.html", "rb") as f:
-                    self.wfile.write(f.read())
-                return
-            else:
-                self.send_error(404, "index.html 파일을 찾을 수 없습니다.")
-                return
-        elif self.path == '/data.json':
-            if not os.path.exists("data.json"):
-                try:
-                    subprocess.run(["python", "report.py"], check=True)
-                except Exception:
-                    pass
-            if os.path.exists("data.json"):
-                self.send_response(200)
-                self.send_header("Content-type", "application/json; charset=utf-8")
-                self.end_headers()
-                with open("data.json", "rb") as f:
-                    self.wfile.write(f.read())
-                return
-        super().do_GET()
+    except Exception as kiwoom_err:
+        # 2단계: 야후 파이낸스(yfinance) 호출 시도 (Fallback)
+        try:
+            ticker_symbol = "^KS11" if market_type == "kospi" else "^KQ11"
+            df = yf.Ticker(ticker_symbol).history(period="2d")
+            
+            if not df.empty:
+                current_price = float(df['Close'].iloc[-1])
+                prev_price = float(df['Close'].iloc[-2]) if len(df) > 1 else current_price
+                change_rate = ((current_price - prev_price) / prev_price) * 100
+                return round(current_price, 2), round(change_rate, 2)
+        except Exception as yf_err:
+            print(f"[{market_type.upper()} 지수 수집 실패] 키움 및 야후 조회 모두 실패: {yf_err}")
+            
+    return 0.0, 0.0
 
-if not appkey or not secretkey:
-    print("재시도(토큰 재발급): KIWOOM_APPKEY / KIWOOM_SECRETKEY 미설정 (.env 확인)")
-else:
-    print("키움증권 API 인증키 로드 완료")
+@app.route('/')
+def index():
+    # 코스피, 코스닥 지수 데이터 수집 (키움 1차 -> 야후 2차 Fallback 적용)
+    kospi_price, kospi_rate = fetch_market_index("kospi")
+    kosdaq_price, kosdaq_rate = fetch_market_index("kosdaq")
+    
+    # 템플릿에 전달할 데이터 딕셔너리
+    market_data = {
+        "kospi": {"price": kospi_price, "rate": kospi_rate},
+        "kosdaq": {"price": kosdaq_price, "rate": kosdaq_rate}
+    }
+    
+    return render_template('index.html', data=market_data)
 
-with socketserver.TCPServer(("", PORT), IRDashboardHandler) as httpd:
-    print(f"대시보드: http://127.0.0.1:{PORT}  (종료: Ctrl+C)")
-    httpd.serve_forever()
+@app.route('/api/data')
+def api_data():
+    kospi_price, kospi_rate = fetch_market_index("kospi")
+    kosdaq_price, kosdaq_rate = fetch_market_index("kosdaq")
+    
+    return jsonify({
+        "kospi": {"price": kospi_price, "rate": kospi_rate},
+        "kosdaq": {"price": kosdaq_price, "rate": kosdaq_rate}
+    })
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
