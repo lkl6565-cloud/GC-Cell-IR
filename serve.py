@@ -135,7 +135,8 @@ def get_market_indices_with_cli_and_fallback():
     kq26_val, kq26_ratio = "7,302.04", "0.00%"
     success = False
 
-    idx_data = kiwoom_client.request("domestic/market/index", {"market_type": "pharmacy", "code": "120"})
+    # 코스닥 제약 업종 코드 '120' 파라미터 적용
+    idx_data = kiwoom_client.request("domestic/market/index", {"code": "120"})
     if idx_data:
         try:
             if "kospi" in idx_data and "kosdaq" in idx_data:
@@ -147,8 +148,8 @@ def get_market_indices_with_cli_and_fallback():
                 kosdaq_chg = float(idx_data['kosdaq'].get('change_rate', idx_data['kosdaq'].get('vsrt', 0)))
                 kosdaq_ratio = f"{'+' if kosdaq_chg > 0 else ''}{kosdaq_chg:.2f}%"
 
-                if "pharmacy" in idx_data or "120" in idx_data:
-                    ph_data = idx_data.get("pharmacy", idx_data.get("120", {}))
+                ph_data = idx_data.get("pharmacy", idx_data.get("120", idx_data.get("kq26", {})))
+                if ph_data:
                     kq26_val = f"{float(ph_data.get('value', ph_data.get('prpr', 0))):,.2f}"
                     kq26_chg = float(ph_data.get('change_rate', ph_data.get('vsrt', 0)))
                     kq26_ratio = f"{'+' if kq26_chg > 0 else ''}{kq26_chg:.2f}%"
@@ -344,63 +345,51 @@ def fetch_google_news_fallback(query, display=3):
         print(f"[뉴스 구글 RSS 예외]: {e}")
     return news_list[:display]
 
-def fetch_nbi_news_multi_source(display=3):
-    order_env = os.getenv("NBI_NEWS_ORDER", "yahoo,investing,google")
-    sources = [s.strip().lower() for s in order_env.split(",")]
+def fetch_nbi_news(display=3):
+    """
+    [NBI 뉴스 수집 함수]
+    - 1순위: 네이버 뉴스 API (한글 혼용 최적화 키워드 조합)
+    - 2순위: 야후 파이낸스 RSS (^NBI 전용 헤드라인)
+    """
+    news_list = []
     
-    collected_news = []
-    query = "Nasdaq Biotechnology Index OR NBI stock news"
-    KST = timezone(timedelta(hours=9))
+    # 1순위: 네이버 뉴스 API (국내 보도된 글로벌/미국 바이오 동향)
+    primary_query = '"나스닥 바이오" OR "미국 바이오주" OR "글로벌 제약바이오"'
+    try:
+        news_list = fetch_naver_news_api(primary_query, display)
+    except Exception as e:
+        print(f"[NBI 네이버 뉴스 1차 수집 예외]: {e}")
 
-    for src in sources:
-        if len(collected_news) >= display:
-            break
-        
-        temp_list = []
-        if src == "yahoo":
-            try:
-                rss_url = f"https://finance.yahoo.com/rss/headline?s=^NBI"
-                feed = feedparser.parse(rss_url)
-                now = datetime.now(KST)
-                for entry in feed.entries:
-                    temp_list.append({
-                        "date": now.strftime("%m/%d"),
-                        "title": entry.get("title", ""),
-                        "publisher": "Yahoo Finance",
-                        "linkUrl": entry.get("link", "#")
-                    })
-            except Exception:
-                pass
-        elif src == "investing":
-            try:
-                rss_url = f"https://www.investing.com/rss/news_25.rss"
-                feed = feedparser.parse(rss_url)
-                now = datetime.now(KST)
-                for entry in feed.entries:
-                    temp_list.append({
-                        "date": now.strftime("%m/%d"),
-                        "title": entry.get("title", ""),
-                        "publisher": "Investing.com",
-                        "linkUrl": entry.get("link", "#")
-                    })
-            except Exception:
-                pass
-        elif src == "google":
-            temp_list = fetch_google_news_fallback(query, display)
+    # 2순위: 야후 파이낸스 NBI(^NBI) RSS 활용
+    if not news_list:
+        try:
+            rss_url = "https://finance.yahoo.com/rss/headline?s=^NBI"
+            feed = feedparser.parse(rss_url)
+            KST = timezone(timedelta(hours=9))
+            now = datetime.now(KST)
+            
+            for entry in feed.entries:
+                title = entry.get("title", "제목 없음")
+                link = entry.get("link", "#")
+                publisher = "Yahoo Finance"
+                
+                if " - " in title:
+                    parts = title.rsplit(" - ", 1)
+                    title, publisher = parts[0], parts[1]
+                
+                news_list.append({
+                    "date": now.strftime("%m/%d"),
+                    "title": title,
+                    "publisher": publisher,
+                    "linkUrl": link
+                })
+                
+                if len(news_list) >= display:
+                    break
+        except Exception as e:
+            print(f"[NBI 야후 파이낸스 RSS 2차 수집 예외]: {e}")
 
-        for item in temp_list:
-            if not any(n['title'] == item['title'] for n in collected_news):
-                collected_news.append(item)
-            if len(collected_news) >= display:
-                break
-
-    if len(collected_news) < display:
-        extra = fetch_google_news_fallback(query, display - len(collected_news))
-        for item in extra:
-            if not any(n['title'] == item['title'] for n in collected_news):
-                collected_news.append(item)
-
-    return collected_news[:display]
+    return news_list[:display]
 
 def generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_ratio, fx_val, fx_ratio, company_news):
     default_analysis = {
@@ -498,7 +487,8 @@ def generate_data():
             combined_company_news.append(item)
     company_news = combined_company_news[:3]
 
-    nbi_news = fetch_nbi_news_multi_source(3)
+    # NBI 뉴스는 1순위 네이버 API(추천 키워드) + 2순위 야후 RSS(^NBI) 반영
+    nbi_news = fetch_nbi_news(3)
 
     analysis_data = generate_gemini_analysis(
         price, ratio, volume, investor_info, 
