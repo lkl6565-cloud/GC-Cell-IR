@@ -28,8 +28,9 @@
         <div class="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
             <div class="flex items-center space-x-2.5">
                 <div class="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-xs">GC</div>
-                <h1 class="text-xs font-bold text-white tracking-tight flex items-center gap-1.5">
-                    지씨셀 IR 데일리 브리핑
+                <!-- screenTitle 동적 바인딩 영역 -->
+                <h1 id="screenTitle" class="text-xs font-bold text-white tracking-tight flex items-center gap-1.5">
+                    IR 주가변동 3대 요인 [로딩 중...]
                     <span class="px-1.5 py-0.5 text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-mono">AUTO</span>
                 </h1>
             </div>
@@ -54,7 +55,7 @@
                 <div class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
                     <i data-lucide="clock" class="w-3.5 h-3.5"></i> 장 마감 후 자동 갱신
                 </div>
-                <p id="banner-desc" class="text-[11px] text-zinc-400">키움증권 REST API 기준 화면입니다. 새로고침 버튼은 시세·수급·뉴스를 모두 새로 가져옵니다 (serve.py 실행 시). 메일은 마감 후 자동 발송분이 나갑니다.</p>
+                <p id="banner-desc" class="text-[11px] text-zinc-400">키움증권 REST API 기준 화면입니다. 새로고침 버튼은 시세·수급·뉴스를 모두 새로 가져옵니다. 메일은 마감 후 자동 발송분이 나갑니다.</p>
             </div>
             <button onclick="openEmailModal()" class="w-full sm:w-auto flex items-center justify-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-semibold transition-all shadow-lg shadow-emerald-950/50">
                 <i data-lucide="mail" class="w-3.5 h-3.5"></i>
@@ -174,13 +175,16 @@
         <!-- Grid Container 2: IR 주가변동 3대 요인 분석 & 매크로 지표 -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
 
-            <!-- 2. IR 주가변동 3대 요인 분석 (IR 톤 적용) -->
+            <!-- 2. IR 주가변동 3대 요인 분석 (IR 톤 적용 + AI / 자동집계 배지 포함) -->
             <section class="md:col-span-2 bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-5 space-y-4 shadow-xl backdrop-blur-sm">
                 <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
                     <h2 class="text-sm font-bold text-white flex items-center gap-1.5">
                         <i data-lucide="zap" class="w-4 h-4 text-amber-400"></i> 2. IR 주가변동 3대 핵심 요인 분석
                     </h2>
-                    <span class="text-[9px] px-2 py-0.5 bg-amber-950/60 text-amber-400 border border-amber-800/50 rounded font-mono">기업·업계·매크로</span>
+                    <!-- analysis.is_ai 상태에 따라 동적으로 변경되는 배지 컨테이너 -->
+                    <div id="ai-status-badge">
+                        <span class="text-[9px] px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded font-mono">집계 대기중</span>
+                    </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -188,21 +192,21 @@
                         <div class="font-bold text-emerald-400 flex items-center gap-1.5 border-b border-zinc-800/60 pb-1.5">
                             <i data-lucide="newspaper" class="w-3.5 h-3.5"></i> 1. 기사 기반 기업 측면
                         </div>
-                        <p id="analysis-internal" class="text-zinc-300 text-[11px] leading-relaxed">면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각으로 매수세 유입됨.</p>
+                        <p id="analysis-internal" class="text-zinc-300 text-[11px] leading-relaxed">데이터 수종 대기 중...</p>
                     </div>
 
                     <div class="bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/70 space-y-2">
                         <div class="font-bold text-blue-400 flex items-center gap-1.5 border-b border-zinc-800/60 pb-1.5">
                             <i data-lucide="users" class="w-3.5 h-3.5"></i> 2. 업계 기반 (코스닥제약/NBI)
                         </div>
-                        <p id="analysis-supply-external" class="text-zinc-300 text-[11px] leading-relaxed">나스닥 바이오(NBI) 및 코스닥 제약 섹터 전반의 투자 심리 개선으로 동조화 상승함.</p>
+                        <p id="analysis-supply-external" class="text-zinc-300 text-[11px] leading-relaxed">데이터 수종 대기 중...</p>
                     </div>
 
                     <div class="bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/70 space-y-2">
                         <div class="font-bold text-purple-400 flex items-center gap-1.5 border-b border-zinc-800/60 pb-1.5">
                             <i data-lucide="globe" class="w-3.5 h-3.5"></i> 3. 매크로 기반 (증시/환율)
                         </div>
-                        <p id="analysis-macro-sector" class="text-zinc-300 text-[11px] leading-relaxed">원/달러 환율 안정세 및 외국인 수급 환경 개선으로 하방 압력 제한됨.</p>
+                        <p id="analysis-macro-sector" class="text-zinc-300 text-[11px] leading-relaxed">데이터 수종 대기 중...</p>
                     </div>
                 </div>
             </section>
@@ -325,12 +329,10 @@
             return s.length >= 5 ? s.substring(s.length - 5) : '11/05';
         }
 
-        // [방어 로직 보완] 뉴스가 비어있을 때 기존 store 데이터를 유지하거나 빈 상태를 안전하게 처리
         function renderNews(containerId, items, badgeColor) {
             const box = $(containerId);
             if (!box) return;
             
-            // 만약 새 데이터가 비어있고 기존 store에 데이터가 있다면 기존 데이터 유지
             const targetItems = (Array.isArray(items) && items.length > 0) ? items : (store[containerId === 'company-news-container' ? 'companyNews' : 'nbiNews'] || []);
 
             if (!Array.isArray(targetItems) || targetItems.length === 0) {
@@ -383,7 +385,6 @@
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                // 브라우저 캐시 방지를 위해 타임스탬프 추가
                 const res = await fetch(`${url}?_t=${Date.now()}`, { signal: controller.signal, cache: 'no-store' });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 return await res.json();
@@ -423,7 +424,6 @@
                     newData = await getJson(DATA_URL, 10000);
                 }
                 
-                // [데이터 병합 방어 로직] 새로 가져온 데이터가 비어있거나 누락된 필드가 있다면 기존 store 데이터로 보완
                 if (newData) {
                     store = {
                         ...newData,
@@ -461,6 +461,14 @@
             }
             setStatus(fresh, `${fresh ? '동기화 완료' : '오래된 데이터'}: ${d.updatedAt || d.tradingDate || '-'}`);
 
+            // 1. screenTitle 동적 바인딩 반영
+            if (d.screenTitle) {
+                const titleEl = $('screenTitle');
+                if (titleEl) {
+                    titleEl.innerHTML = `${d.screenTitle} <span class="px-1.5 py-0.5 text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-mono">AUTO</span>`;
+                }
+            }
+
             const s = d.stock || {};
             setText('stock-price', s.price);
             setTone('stock-ratio', s.ratio, 'text-sm font-bold');
@@ -491,10 +499,20 @@
             if (m.kosdaq) { setText('macro-kosdaq-val', m.kosdaq.value); setTone('macro-kosdaq-ratio', m.kosdaq.ratio, macBase); }
             if (m.usdKrw) { setText('macro-fx-val', m.usdKrw.value); setTone('macro-fx-ratio', m.usdKrw.change || m.usdKrw.ratio, macBase); }
 
+            // 2. 분석 내용 및 analysis.is_ai 상태에 따른 배지 동적 렌더링
             const a = d.analysis || {};
             if (a.internal) setText('analysis-internal', a.internal);
             if (a.supply) setText('analysis-supply-external', a.supply);
             if (a.macro) setText('analysis-macro-sector', a.macro);
+
+            const badgeContainer = $('ai-status-badge');
+            if (badgeContainer) {
+                if (a.is_ai) {
+                    badgeContainer.innerHTML = '<span class="text-[9px] px-2 py-0.5 bg-blue-950/60 text-blue-400 border border-blue-800/50 rounded font-mono">✨ Gemini AI 요약</span>';
+                } else {
+                    badgeContainer.innerHTML = '<span class="text-[9px] px-2 py-0.5 bg-amber-950/60 text-amber-400 border border-amber-800/50 rounded font-mono">기업·업계·매크로</span>';
+                }
+            }
         }
 
         function refreshData() { fetchLiveData(true); }
@@ -536,9 +554,9 @@
 ${list(d.companyNews)}
 
 3. [IR 주가변동 3대 핵심 요인 분석]
-   - 1. 기사 기반 기업 측면: ${a.internal || '면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각으로 매수세 유입됨.'}
-   - 2. 업계 기반 (코스닥제약/NBI): ${a.supply || '나스닥 바이오(NBI) 및 코스닥 제약 섹터 전반의 투자 심리 개선으로 동조화 상승함.'}
-   - 3. 매크로 기반 (증시/환율): ${a.macro || '원/달러 환율 안정세 및 외국인 수급 환경 개선으로 하방 압력 제한됨.'}
+   - 1. 기사 기반 기업 측면: ${a.internal || '-'}
+   - 2. 업계 기반 (코스닥제약/NBI): ${a.supply || '-'}
+   - 3. 매크로 기반 (증시/환율): ${a.macro || '-'}
 
 4. [업종 지수 및 매크로 지표]
    - 나스닥 바이오(NBI): ${v(m.nbi)} (${v(m.nbi, 'ratio')})
