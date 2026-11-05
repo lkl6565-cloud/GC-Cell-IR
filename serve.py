@@ -78,10 +78,6 @@ class KiwoomRESTClient:
 kiwoom_client = KiwoomRESTClient()
 
 def get_safe_yf_history(ticker_symbol, period="5d", retries=3, backoff_factor=2):
-    """
-    해외 서버(Render 등)에서 야후 파이낸스 429 Rate Limit 우회를 위해 
-    User-Agent 헤더가 포함된 커스텀 세션을 사용하고 에러 발생 시 재시도하는 함수
-    """
     session = Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -107,9 +103,6 @@ def get_safe_yf_history(ticker_symbol, period="5d", retries=3, backoff_factor=2)
     return yf.DataFrame()
 
 def scrape_investing_index(url_path_hint):
-    """
-    Investing.com 크롤링 Fallback 함수 (예: KQ26 또는 NBI 등)
-    """
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -128,7 +121,6 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     price, ratio, volume = "0", "0.00%", "0"
     success = False
 
-    # 1순위: 키움 REST API 호출 (공식 장 마감 종가 'clpr' 타겟팅)
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
     if api_data and isinstance(api_data, dict):
         try:
@@ -144,7 +136,6 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
         except Exception as e:
             print(f"[키움 주가 파싱 예외]: {e}")
 
-    # 2순위: 안전한 세션과 재시도가 적용된 야후 파이낸스 백업 호출
     if not success:
         try:
             hist = get_safe_yf_history(f"{code}.KQ", period="5d")
@@ -173,7 +164,6 @@ def get_market_indices_with_cli_and_fallback():
     kq26_val, kq26_ratio = "7,302.04", "0.00%"
     success = False
 
-    # 코스닥 제약 업종 코드 '120' 파라미터 적용
     idx_data = kiwoom_client.request("domestic/market/index", {"code": "120"})
     if idx_data:
         try:
@@ -554,7 +544,6 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        # 404 에러 방지를 위한 경로 정리
         clean_path = self.path.split('?')[0].rstrip('/')
         if clean_path == '/api/refresh' or clean_path == 'api/refresh':
             try:
@@ -574,9 +563,12 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "error", "message": f"Not Found: {self.path}"}, ensure_ascii=False).encode('utf-8'))
 
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
 def run_server():
-    PORT = int(os.environ.get("PORT", 10000))
-    with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
+    PORT = int(os.environ.get("PORT", 8000))
+    with ReusableTCPServer(("", PORT), CustomHandler) as httpd:
         print(f"Serving HTTP on port {PORT}...")
         httpd.serve_forever()
 
