@@ -94,13 +94,14 @@ def scrape_investing_index(url_path_hint):
     return None, None
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    price, ratio, volume = "10,290", "+2.80%", "72,605"
+    price, ratio, volume = "10,150", "+1.39%", "73,584"
     success = False
 
+    # 1순위: 키움 REST API 호출 (실시간 체결가 대신 공식 장 마감 종가 'clpr' 타겟팅)
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
-    if api_data:
+    if api_data and isinstance(api_data, dict):
         try:
-            p_val = int(api_data.get("price", api_data.get("current_price", api_data.get("clpr", 0))))
+            p_val = int(api_data.get("clpr", api_data.get("stck_clpr", 0)))
             chg_val = float(api_data.get("change_rate", api_data.get("rate", api_data.get("vsrt", 0))))
             vol_val = int(api_data.get("volume", api_data.get("acml_vol", 0)))
             if p_val > 0:
@@ -108,9 +109,10 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
                 ratio = f"{'+' if chg_val > 0 else ''}{chg_val:.2f}%"
                 volume = f"{vol_val:,}"
                 success = True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[키움 주가 파싱 예외]: {e}")
 
+    # 2순위: 야후 파이낸스 백업 (API 실패 시)
     if not success:
         try:
             ticker = yf.Ticker(f"{code}.KQ")
