@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import shutil
 from datetime import datetime
 from pathlib import Path
 import feedparser
@@ -10,30 +11,53 @@ import requests
 from email.utils import parsedate_to_datetime
 import re
 from dotenv import load_dotenv
+import http.server
+import socketserver
 
 # .env 파일 경로 명시적 지정 및 override 설정
 env_path = Path(__file__).resolve().parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
 def run_kwcli_json(cmd_list):
-    """키움 공식 CLI를 절대 경로로 안전하게 실행하고 JSON 결과를 파싱하는 함수"""
+    """
+    [1순위 데이터 소스: 키움 공식 CLI]
+    - 시스템 PATH 및 Render/로컬 표준 후보 경로에서 'kiwoomcli' 또는 'kwcli'를 자동 탐색하여 실행합니다.
+    """
     if cmd_list and cmd_list[0] in ["kiwoomcli", "kwcli"]:
-        cmd_list[0] = r"C:\Users\dhkim0521\.local\bin\kiwoomcli.exe"
+        binary_path = shutil.which("kiwoomcli") or shutil.which("kwcli")
+        
+        if not binary_path:
+            candidates = [
+                "/opt/render/.local/bin/kiwoomcli",
+                "/opt/render/.local/bin/kwcli",
+                os.path.expanduser("~/.local/bin/kiwoomcli"),
+                os.path.expanduser("~/.local/bin/kwcli"),
+                r"C:\Users\dhkim0521\.local\bin\kiwoomcli.exe",
+                r"C:\Users\dhkim0521\.local\bin\kwcli.exe"
+            ]
+            for path in candidates:
+                if os.path.exists(path):
+                    binary_path = path
+                    break
+        
+        if binary_path:
+            cmd_list[0] = binary_path
+        else:
+            cmd_list[0] = "kiwoomcli"
 
     try:
         result = subprocess.run(cmd_list, capture_output=True, text=True, check=True, encoding='utf-8')
         if result.stdout.strip():
             return json.loads(result.stdout)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[키움 CLI 실행 예외]: {e}")
     return None
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    """1차: 키움 공식 CLI 주가 규격 조회 / 2차: 실패 시 야후 파이낸스 백업"""
     price, ratio, volume = "10,270", "+2.60%", "15,584"
     success = False
 
-    data = run_kwcli_json(["kiwoomcli", "domestic", "stocks", "info", f"--code={code}"])
+    data = run_kwcli_json(["kwcli", "domestic", "stocks", "info", f"--code={code}"])
     if data:
         try:
             p_val = int(data.get("price", data.get("current_price", data.get("clpr", 0))))
@@ -66,13 +90,12 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
     return price, ratio, volume
 
 def get_market_indices_with_cli_and_fallback():
-    """1차: 키움 공식 CLI 시장 지수 조회 / 2차: 실패 시 야후 파이낸스(^KS11, ^KQ11) 백업"""
     kospi_val, kospi_ratio = "2,560.12", "+0.45%"
     kosdaq_val, kosdaq_ratio = "742.80", "+0.15%"
     kq26_val, kq26_ratio = "7,264.11", "-1.42%"
     success = False
 
-    idx_data = run_kwcli_json(["kiwoomcli", "domestic", "market", "index"])
+    idx_data = run_kwcli_json(["kwcli", "domestic", "market", "index"])
     if idx_data:
         try:
             if "kospi" in idx_data and "kosdaq" in idx_data:
@@ -94,8 +117,13 @@ def get_market_indices_with_cli_and_fallback():
 
     if not success:
         try:
-            kospi_ticker = yf.Ticker("^KS11")
-            k_hist = kospi_ticker.history(period="2d")
+            yahoo_tickers = {
+                "kospi": "^KS11",
+                "kosdaq": "^KQ11",
+                "pharmacy": "^KQ26"
+            }
+
+            k_hist = yf.Ticker(yahoo_tickers["kospi"]).history(period="2d")
             if not k_hist.empty:
                 kp_val = k_hist['Close'].iloc[-1]
                 if kp_val == kp_val:
@@ -104,8 +132,7 @@ def get_market_indices_with_cli_and_fallback():
                     kospi_val = f"{kp_val:,.2f}"
                     kospi_ratio = f"{'+' if kp_chg > 0 else ''}{kp_chg:.2f}%"
 
-            kosdaq_ticker = yf.Ticker("^KQ11")
-            kq_hist = kosdaq_ticker.history(period="2d")
+            kq_hist = yf.Ticker(yahoo_tickers["kosdaq"]).history(period="2d")
             if not kq_hist.empty:
                 kqp_val = kq_hist['Close'].iloc[-1]
                 if kqp_val == kqp_val:
@@ -113,13 +140,21 @@ def get_market_indices_with_cli_and_fallback():
                     kqp_chg = ((kqp_val - kqp_prev) / kqp_prev) * 100 if kqp_prev else 0.0
                     kosdaq_val = f"{kqp_val:,.2f}"
                     kosdaq_ratio = f"{'+' if kqp_chg > 0 else ''}{kqp_chg:.2f}%"
+
+            ph_hist = yf.Ticker(yahoo_tickers["pharmacy"]).history(period="2d")
+            if not ph_hist.empty:
+                php_val = ph_hist['Close'].iloc[-1]
+                if php_val == php_val:
+                    php_prev = ph_hist['Close'].iloc[-2] if len(ph_hist) > 1 and ph_hist['Close'].iloc[-2] == ph_hist['Close'].iloc[-2] else php_val
+                    php_chg = ((php_val - php_prev) / php_prev) * 100 if php_prev else 0.0
+                    kq26_val = f"{php_val:,.2f}"
+                    kq26_ratio = f"{'+' if php_chg > 0 else ''}{php_chg:.2f}%"
         except Exception as e:
             print(f"야후 파이낸스 지수 백업 수집 오류: {e}")
 
     return (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio)
 
 def fetch_investor_data_multi_fallback(code="144510"):
-    """수급 수집 3단계 파이프라인 (키움 CLI -> 네이버 금융 크롤링)"""
     investor = {
         "foreign": "-1,250",
         "organ": "+3,420",
@@ -132,7 +167,7 @@ def fetch_investor_data_multi_fallback(code="144510"):
     }
     success = False
 
-    cli_inv = run_kwcli_json(["kiwoomcli", "domestic", "stocks", "investor-by-stock", f"--code={code}"])
+    cli_inv = run_kwcli_json(["kwcli", "domestic", "stocks", "investor-by-stock", f"--code={code}"])
     if cli_inv and isinstance(cli_inv, dict):
         try:
             frn = int(cli_inv.get("foreign", cli_inv.get("frn_net_qty", 0)))
@@ -199,7 +234,6 @@ def fetch_investor_data_multi_fallback(code="144510"):
     return investor
 
 def fetch_naver_news_api(query, display=3):
-    """NAVER API HUB 수집 -> 실패 시 구글 뉴스 RSS 백업"""
     news_list = []
     encoded_query = requests.utils.quote(query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
@@ -265,7 +299,6 @@ def fetch_naver_news_api(query, display=3):
     return news_list[:display]
 
 def fetch_google_news_fallback(query, display=3):
-    """구글 뉴스 RSS 백업 수집"""
     news_list = []
     try:
         rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
@@ -327,7 +360,6 @@ def generate_data():
                 nbi_val = f"{np_val:,.2f}"
                 nbi_ratio = f"{'+' if np_chg > 0 else ''}{np_chg:.2f}%"
 
-        # 환율 표준 티커 USDKRW=X 적용
         fx_ticker = yf.Ticker("USDKRW=X")
         fx_hist = fx_ticker.history(period="2d")
         if not fx_hist.empty:
@@ -378,5 +410,13 @@ def generate_data():
         json.dump(data, f, ensure_ascii=False, indent=4)
     print("--- [정밀 반영 완료] 올바른 수급 커맨드 'investor-by-stock' 및 USDKRW 환율 적용 ---")
 
+def run_server():
+    PORT = int(os.environ.get("PORT", 10000))
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        print(f"Serving HTTP on port {PORT}...")
+        httpd.serve_forever()
+
 if __name__ == "__main__":
     generate_data()
+    run_server()
