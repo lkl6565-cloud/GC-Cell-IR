@@ -18,9 +18,8 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 def run_kwcli_json(cmd_list):
     """
-    [데이터 소스 1순위: 키움 공식 CLI]
-    - 키움 가이드 사양(uv tool install kwcli)에 따라 설치된 실행 파일('kiwoomcli' 또는 'kwcli')을 
-      시스템 PATH 및 Render/로컬 표준 후보 경로에서 자동으로 탐색하여 실행합니다.
+    [1순위 데이터 소스: 키움 공식 CLI]
+    - 시스템 PATH 및 Render/로컬 표준 후보 경로에서 'kiwoomcli' 또는 'kwcli'를 자동 탐색하여 실행합니다.
     """
     if cmd_list and cmd_list[0] in ["kiwoomcli", "kwcli"]:
         binary_path = shutil.which("kiwoomcli") or shutil.which("kwcli")
@@ -55,8 +54,8 @@ def run_kwcli_json(cmd_list):
 def get_stock_data_with_cli_and_fallback(code="144510"):
     """
     [주가 데이터 수집 파이프라인]
-    - 1차: 키움 공식 CLI 주가 조회
-    - 2차(백업): 야후 파이낸스({code}.KQ) 연동
+    - 1차: 키움 공식 CLI (`kwcli domestic stocks info --code=144510`)
+    - 2차(백업): 야후 파이낸스 (`144510.KQ`)
     """
     price, ratio, volume = "10,270", "+2.60%", "15,584"
     success = False
@@ -96,14 +95,15 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
 def get_market_indices_with_cli_and_fallback():
     """
     [시장 지수 데이터 수집 파이프라인]
-    - 1차: 키움 공식 CLI 시장 지수 조회
-    - 2차(백업): 야후 파이낸스 지수(^KS11, ^KQ11) 연동
+    - 1차: 키움 공식 CLI (`kwcli domestic market index`) - 코스피, 코스닥, 제약(pharmacy) 포함
+    - 2차(백업): 야후 파이낸스 전용 티커 매핑 분리 (^KS11, ^KQ11, ^KQ26)
     """
     kospi_val, kospi_ratio = "2,560.12", "+0.45%"
     kosdaq_val, kosdaq_ratio = "742.80", "+0.15%"
     kq26_val, kq26_ratio = "7,264.11", "-1.42%"
     success = False
 
+    # 1차: 키움 CLI 호출
     idx_data = run_kwcli_json(["kwcli", "domestic", "market", "index"])
     if idx_data:
         try:
@@ -124,10 +124,16 @@ def get_market_indices_with_cli_and_fallback():
         except Exception:
             pass
 
+    # 2차: 야후 파이낸스 백업 (전용 티커 분리 적용)
     if not success:
         try:
-            kospi_ticker = yf.Ticker("^KS11")
-            k_hist = kospi_ticker.history(period="2d")
+            yahoo_tickers = {
+                "kospi": "^KS11",    # 코스피 지수
+                "kosdaq": "^KQ11",   # 코스닥 지수
+                "pharmacy": "^KQ26"  # 코스닥 제약/바이오 섹터 지수
+            }
+
+            k_hist = yf.Ticker(yahoo_tickers["kospi"]).history(period="2d")
             if not k_hist.empty:
                 kp_val = k_hist['Close'].iloc[-1]
                 if kp_val == kp_val:
@@ -136,8 +142,7 @@ def get_market_indices_with_cli_and_fallback():
                     kospi_val = f"{kp_val:,.2f}"
                     kospi_ratio = f"{'+' if kp_chg > 0 else ''}{kp_chg:.2f}%"
 
-            kosdaq_ticker = yf.Ticker("^KQ11")
-            kq_hist = kosdaq_ticker.history(period="2d")
+            kq_hist = yf.Ticker(yahoo_tickers["kosdaq"]).history(period="2d")
             if not kq_hist.empty:
                 kqp_val = kq_hist['Close'].iloc[-1]
                 if kqp_val == kqp_val:
@@ -145,6 +150,15 @@ def get_market_indices_with_cli_and_fallback():
                     kqp_chg = ((kqp_val - kqp_prev) / kqp_prev) * 100 if kqp_prev else 0.0
                     kosdaq_val = f"{kqp_val:,.2f}"
                     kosdaq_ratio = f"{'+' if kqp_chg > 0 else ''}{kqp_chg:.2f}%"
+
+            ph_hist = yf.Ticker(yahoo_tickers["pharmacy"]).history(period="2d")
+            if not ph_hist.empty:
+                php_val = ph_hist['Close'].iloc[-1]
+                if php_val == php_val:
+                    php_prev = ph_hist['Close'].iloc[-2] if len(ph_hist) > 1 and ph_hist['Close'].iloc[-2] == ph_hist['Close'].iloc[-2] else php_val
+                    php_chg = ((php_val - php_prev) / php_prev) * 100 if php_prev else 0.0
+                    kq26_val = f"{php_val:,.2f}"
+                    kq26_ratio = f"{'+' if php_chg > 0 else ''}{php_chg:.2f}%"
         except Exception as e:
             print(f"야후 파이낸스 지수 백업 수집 오류: {e}")
 
@@ -153,7 +167,7 @@ def get_market_indices_with_cli_and_fallback():
 def fetch_investor_data_multi_fallback(code="144510"):
     """
     [투자자별 수급 데이터 수집 파이프라인]
-    - 1차: 키움 공식 CLI (`investor-by-stock`)
+    - 1차: 키움 공식 CLI (`kwcli domestic stocks investor-by-stock`)
     - 2차(백업): 네이버 금융 크롤링 연동
     """
     investor = {
@@ -415,7 +429,7 @@ def generate_data():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [최종 정밀 반영 완료] 키움 가이드 사양 준수 및 모든 데이터 소스 조건 통합 완료 ---")
+    print("--- [최종 완벽 반영 완료] 키움 CLI 가이드 사양 및 다중 소스 조건 통합 완료 ---")
 
 if __name__ == "__main__":
     generate_data()
