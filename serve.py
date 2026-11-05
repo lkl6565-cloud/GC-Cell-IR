@@ -410,9 +410,34 @@ def generate_data():
         json.dump(data, f, ensure_ascii=False, indent=4)
     print("--- [데이터 갱신 완료] data.json 생성됨 ---")
 
+class CustomHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/' or self.path == '/index.html':
+            self.path = '/index.html'
+        return super().do_GET()
+
+    def do_POST(self):
+        if self.path == '/api/refresh':
+            try:
+                generate_data()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                response_data = {"status": "success", "message": "데이터가 성공적으로 갱신되었습니다."}
+                self.wfile.write(json.dumps(response_data, ensure_ascii=False).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                error_data = {"status": "error", "message": str(e)}
+                self.wfile.write(json.dumps(error_data, ensure_ascii=False).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
 def run_server():
     PORT = int(os.environ.get("PORT", 10000))
-    Handler = http.server.SimpleHTTPRequestHandler
+    Handler = CustomHandler
     with socketserver.TCPServer(("", PORT), Handler) as httpd:
         print(f"Serving HTTP on port {PORT}...")
         httpd.serve_forever()
