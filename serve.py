@@ -1,14 +1,19 @@
 import os
+import requests
 from flask import Flask, render_template, jsonify
 import yfinance as yf
 
 app = Flask(__name__)
 
+# Render Environment에 등록된 키움 API 인증 정보 불러오기
+KIWOOM_APP_KEY = os.environ.get("KIWOOM_APP_KEY")
+KIWOOM_SECRET_KEY = os.environ.get("KIWOOM_SECRET_KEY")
+
 def fetch_market_index(market_type="kospi"):
     """
     [데이터 소스 조건]
-    - 코스피: 키움증권 REST API (1차) / 야후 파이낸스 ^KS11 (2차 Fallback)
-    - 코스닥: 키움증권 REST API (1차) / 야후 파이낸스 ^KQ11 (2차 Fallback)
+    - 코스피: 야후 파이낸스 ^KS11 (키움 API 연동 전/Fallback)
+    - 코스닥: 야후 파이낸스 ^KQ11 (키움 API 연동 전/Fallback)
     - 원/달러 환율: 야후 파이낸스 USDKRW=X
     - 나스닥 바이오(NBI): 야후 파이낸스 ^NBI
     """
@@ -36,19 +41,25 @@ def fetch_gccell_data():
     """
     [데이터 소스 조건]
     - 지씨셀(144510) 주가 및 투자자별 수급 현황
-    - 1차: 키움증권 REST API (종목 시세 및 투자자별 매매동향)
+    - 1차: 키움증권 REST API (환경 변수 인증 후 요청)
     - 2차(Fallback): 야후 파이낸스 (144510.KQ) 주가 조회 및 수급 기본값 처리
     """
     try:
-        # [키움증권 API 연동 구간 - 종목코드 144510]
-        # kiwoom_price = kiwoom.get_stock_price("144510")
-        # kiwoom_supply = kiwoom.get_investor_trend("144510")
-        # if kiwoom_price and kiwoom_supply:
-        #     return kiwoom_price, kiwoom_supply
+        # 인증 정보가 존재할 경우 키움 REST API 호출 시도
+        if KIWOOM_APP_KEY and KIWOOM_SECRET_KEY:
+            # TODO: 키움증권 REST API 엔드포인트 및 토큰 발급/조회 로직 구현 영역
+            # headers = {"appKey": KIWOOM_APP_KEY, "secretKey": KIWOOM_SECRET_KEY}
+            # response = requests.get("https://api.kiwoom.com/v1/stock/price?code=144510", headers=headers)
+            # if response.status_code == 200:
+            #     data = response.json()
+            #     return { "price": data['price'], "rate": data['rate'], "supply": data['supply'] }
+            pass
         
-        raise Exception("키움 API 지씨셀 시세 및 수급 미연결")
+        # 인증 정보가 없거나 API 호출 실패 시 강제 예외 발생 -> Fallback 유도
+        raise Exception("키움 API 인증 정보 미입력 또는 연동 대기 중")
 
     except Exception as kiwoom_err:
+        # 2차 Fallback: 야후 파이낸스(144510.KQ)를 통한 주가 조회
         try:
             df = yf.Ticker("144510.KQ").history(period="2d")
             if not df.empty:
