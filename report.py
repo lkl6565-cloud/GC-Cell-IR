@@ -76,14 +76,14 @@ class KiwoomRESTClient:
 kiwoom_client = KiwoomRESTClient()
 
 def get_stock_data_with_cli_and_fallback(code="144510"):
-    price, ratio, volume = "10,270", "+2.60%", "15,584"
+    price, ratio, volume = "10,150", "+1.39%", "73,584"
     success = False
 
-    # 1순위: 키움 REST API 호출
+    # 1순위: 키움 REST API 호출 (실시간 체결가 대신 공식 장 마감 종가 'clpr' 단독 타겟팅)
     api_data = kiwoom_client.request("domestic/stocks/info", {"code": code})
     if api_data and isinstance(api_data, dict):
         try:
-            p_val = int(api_data.get("price", api_data.get("current_price", api_data.get("clpr", 0))))
+            p_val = int(api_data.get("clpr", api_data.get("stck_clpr", 0)))
             chg_val = float(api_data.get("change_rate", api_data.get("rate", api_data.get("vsrt", 0))))
             vol_val = int(api_data.get("volume", api_data.get("acml_vol", 0)))
             if p_val > 0:
@@ -91,8 +91,8 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
                 ratio = f"{'+' if chg_val > 0 else ''}{chg_val:.2f}%"
                 volume = f"{vol_val:,}"
                 success = True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[키움 주가 파싱 예외]: {e}")
 
     # 2순위: 야후 파이낸스 백업 (API 실패 시)
     if not success:
@@ -438,79 +438,4 @@ def generate_data():
                 fx_val = f"{fp_val:,.2f}"
                 fx_ratio = f"{'+' if fp_chg > 0 else ''}{fp_chg:.2f}원"
     except Exception as e:
-        print(f"매크로 데이터 수집 예외: {e}")
-
-    company_news = fetch_naver_news_api("지씨셀 OR 아티바", 3)
-    
-    # NBI 뉴스는 1순위 네이버 API(추천 키워드) + 2순위 야후 RSS(^NBI) 적용
-    nbi_news = fetch_nbi_news(3)
-
-    analysis_internal = f"지씨셀 종가({price}원, {ratio}) 기준, 면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각으로 매수세 유입."
-    analysis_supply = f"나스닥 바이오(NBI, {nbi_val}) 지수의 상승 동조화 및 제약·바이오 섹터 심리 개선."
-    analysis_macro = f"원/달러 환율({fx_val}) 안정세에 힘입어 주가 하방 압력이 철저히 제한됨."
-
-    data = {
-        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "tradingDate": datetime.now().strftime("%Y-%m-%d"),
-        "stock": {
-            "price": price,
-            "ratio": ratio,
-            "volume": volume,
-            "marketStatus": "마감 기준",
-            "investor": investor_info
-        },
-        "companyNews": company_news,
-        "nbiNews": nbi_news,
-        "macroIndices": {
-            "nbi": {"value": nbi_val, "ratio": nbi_ratio},
-            "kq26": {"value": kq26_val, "ratio": kq26_ratio},
-            "kospi": {"value": kospi_val, "ratio": kospi_ratio},
-            "kosdaq": {"value": kosdaq_val, "ratio": kosdaq_ratio},
-            "usdKrw": {"value": fx_val, "ratio": fx_ratio}
-        },
-        "analysis": {
-            "internal": analysis_internal,
-            "supply": analysis_supply,
-            "macro": analysis_macro
-        }
-    }
-
-    with open("data.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [데이터 갱신 완료] data.json 생성됨 ---")
-
-class CustomHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/' or self.path == '/index.html':
-            self.path = '/index.html'
-        return super().do_GET()
-
-    def do_POST(self):
-        if self.path == '/api/refresh':
-            try:
-                generate_data()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                response_data = {"status": "success", "message": "데이터가 성공적으로 갱신되었습니다."}
-                self.wfile.write(json.dumps(response_data, ensure_ascii=False).encode('utf-8'))
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                error_data = {"status": "error", "message": str(e)}
-                self.wfile.write(json.dumps(error_data, ensure_ascii=False).encode('utf-8'))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-def run_server():
-    PORT = int(os.environ.get("PORT", 10000))
-    Handler = CustomHandler
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print(f"Serving HTTP on port {PORT}...")
-        httpd.serve_forever()
-
-if __name__ == "__main__":
-    generate_data()
-    run_server()
+        print(f"매크로 데이터 수집 예외:
