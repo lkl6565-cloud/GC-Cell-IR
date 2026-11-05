@@ -37,7 +37,7 @@ class KiwoomRESTClient:
             return None
 
         auth_url = f"{self.base_url}/oauth2/token"
-        headers = {"Content-Type": "application/json; charset=utf-8"}
+        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         payload = {
             "grant_type": "client_credentials",
             "appkey": self.app_key,
@@ -45,11 +45,13 @@ class KiwoomRESTClient:
         }
 
         try:
-            res = requests.post(auth_url, json=payload, headers=headers, timeout=3)
+            res = requests.post(auth_url, data=payload, headers=headers, timeout=3)
             if res.status_code == 200:
                 data = res.json()
                 self.access_token = data.get("access_token")
                 return self.access_token
+            else:
+                print(f"[키움 토큰 발급 실패]: Status {res.status_code}, Res: {res.text}")
         except Exception as e:
             print(f"[키움 토큰 발급 예외]: {e}")
         return None
