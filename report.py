@@ -371,6 +371,45 @@ def fetch_google_news_fallback(query, display=3):
 
     return news_list[:display]
 
+def fetch_nbi_news(display=3):
+    """
+    [NBI 뉴스 수집 함수]
+    - 1순위: 네이버 뉴스 API (한글 혼용 최적화 키워드 조합)
+    - 2순위: 야후 파이낸스 RSS (^NBI 전용 헤드라인)
+    """
+    news_list = []
+    primary_query = '"나스닥 바이오" OR "미국 바이오주" OR "글로벌 제약바이오"'
+    try:
+        news_list = fetch_naver_news_api(primary_query, display)
+    except Exception as e:
+        print(f"[NBI 네이버 뉴스 1차 수집 예외]: {e}")
+
+    if not news_list:
+        try:
+            rss_url = "https://finance.yahoo.com/rss/headline?s=^NBI"
+            feed = feedparser.parse(rss_url)
+            now = datetime.now()
+            for entry in feed.entries:
+                title = entry.get("title", "제목 없음")
+                link = entry.get("link", "#")
+                publisher = "Yahoo Finance"
+                if " - " in title:
+                    parts = title.rsplit(" - ", 1)
+                    title, publisher = parts[0], parts[1]
+                
+                news_list.append({
+                    "date": now.strftime("%m/%d"),
+                    "title": title,
+                    "publisher": publisher,
+                    "linkUrl": link
+                })
+                if len(news_list) >= display:
+                    break
+        except Exception as e:
+            print(f"[NBI 야후 파이낸스 RSS 2차 수집 예외]: {e}")
+
+    return news_list[:display]
+
 def generate_data():
     price, ratio, volume = get_stock_data_with_cli_and_fallback("144510")
     (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio) = get_market_indices_with_cli_and_fallback()
@@ -402,8 +441,9 @@ def generate_data():
         print(f"매크로 데이터 수집 예외: {e}")
 
     company_news = fetch_naver_news_api("지씨셀 OR 아티바", 3)
-    nbi_keyword_query = "Amgen OR Gilead OR Vertex OR Regeneron OR Moderna OR Biogen"
-    nbi_news = fetch_naver_news_api(nbi_keyword_query, 3)
+    
+    # NBI 뉴스는 1순위 네이버 API(추천 키워드) + 2순위 야후 RSS(^NBI) 적용
+    nbi_news = fetch_nbi_news(3)
 
     analysis_internal = f"지씨셀 종가({price}원, {ratio}) 기준, 면역세포치료제 글로벌 임상 순항 및 파이프라인 가치 부각으로 매수세 유입."
     analysis_supply = f"나스닥 바이오(NBI, {nbi_val}) 지수의 상승 동조화 및 제약·바이오 섹터 심리 개선."
