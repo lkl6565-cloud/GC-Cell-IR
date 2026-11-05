@@ -46,7 +46,7 @@ class KiwoomRESTClient:
         payload = {
             "grant_type": "client_credentials",
             "appkey": self.app_key,
-            "appsecret": self.secret_key
+            "secretkey": self.secret_key
         }
 
         try:
@@ -70,7 +70,7 @@ class KiwoomRESTClient:
         headers = {
             "Authorization": f"Bearer {token}",
             "appkey": self.app_key,
-            "appsecret": self.secret_key,
+            "secretkey": self.secret_key,
             "Content-Type": "application/json; charset=utf-8"
         }
 
@@ -298,15 +298,31 @@ def fetch_naver_news_api(query, display=3):
     primary_query = query.split(" OR ")[0] if " OR " in query else query
     encoded_query = requests.utils.quote(primary_query)
     
+    # NAVER API HUB 공식 가이드 기준 도메인 및 Path 적용
     api_hub_url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
     legacy_url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display=10&sort=date"
     
+    # 환경변수에서 API HUB 전용 키 및 레거시 키 로드
     client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID") or os.getenv("NAVER_CLIENT_ID_LEGACY")
     client_secret = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NAVER_CLIENT_SECRET") or os.getenv("NAVER_CLIENT_SECRET_LEGACY")
     
+    # API HUB 표준 헤더 우선 적용
     urls_to_try = [
-        (api_hub_url, {"X-NCP-APIGW-API-KEY-ID": client_id, "X-NCP-APIGW-API-KEY": client_secret, "Accept": "application/json"}),
-        (legacy_url, {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret})
+        (
+            api_hub_url, 
+            {
+                "X-NCP-APIGW-API-KEY-ID": client_id, 
+                "X-NCP-APIGW-API-KEY": client_secret, 
+                "Accept": "application/json"
+            }
+        ),
+        (
+            legacy_url, 
+            {
+                "X-Naver-Client-Id": client_id, 
+                "X-Naver-Client-Secret": client_secret
+            }
+        )
     ]
 
     KST = timezone(timedelta(hours=9))
@@ -342,6 +358,8 @@ def fetch_naver_news_api(query, display=3):
                         break
                 if news_list:
                     break
+            else:
+                print(f"[네이버 API 호출 실패 - {target_url}]: Status {res.status_code}, Res: {res.text}")
         except Exception as e:
             print(f"[네이버 뉴스 조회 예외 ({target_url})]: {e}")
 
@@ -560,7 +578,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "error", "message": f"Not Found: {self.path}"}, ensure_ascii=False).encode('utf-8'))
 
 def run_server():
-    PORT = int(os.environ.get("PORT", 10000))
+    PORT = int(os.environ.get("PORT", 8000))
     with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
         print(f"Serving HTTP on port {PORT}...")
         httpd.serve_forever()
