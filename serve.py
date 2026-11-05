@@ -22,6 +22,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 class KiwoomRESTClient:
     def __init__(self):
+        # 실전투자 API 베이스 URL
         self.base_url = "https://api.kiwoom.com"
         self.app_key = (os.getenv("KIWOOM_APPKEY") or "").strip()
         self.secret_key = (os.getenv("KIWOOM_SECRETKEY") or "").strip()
@@ -33,8 +34,11 @@ class KiwoomRESTClient:
         if not self.app_key or not self.secret_key:
             print("[키움 경고]: KIWOOM_APPKEY 또는 KIWOOM_SECRETKEY가 설정되지 않았습니다.")
             return None
+        
         auth_url = f"{self.base_url}/oauth2/token"
-        headers = {"Content-Type": "application/json; charset=utf-8"}
+        headers = {
+            "Content-Type": "application/json;charset=UTF-8"
+        }
         payload = {
             "grant_type": "client_credentials",
             "appkey": self.app_key,
@@ -42,9 +46,11 @@ class KiwoomRESTClient:
         }
         try:
             res = requests.post(auth_url, json=payload, headers=headers, timeout=5)
+            print('Code:', res.status_code)
             if res.status_code == 200:
                 data = res.json()
                 self.access_token = data.get("access_token")
+                print('[키움 토큰 발급 성공]')
                 return self.access_token
             else:
                 print(f"[키움 토큰 발급 실패]: HTTP {res.status_code} - {res.text}")
@@ -61,7 +67,7 @@ class KiwoomRESTClient:
             "Authorization": f"Bearer {token}",
             "appkey": self.app_key,
             "secretkey": self.secret_key,
-            "Content-Type": "application/json; charset=utf-8"
+            "Content-Type": "application/json;charset=UTF-8"
         }
         try:
             res = requests.get(url, headers=headers, params=params, timeout=5)
@@ -145,16 +151,63 @@ def fetch_investor_data_multi_fallback(code="144510"):
         "5d": {"foreign": "+12,400", "organ": "-8,300", "personal": "-4,100"}
     }
 
+def fetch_google_news_fallback(query, display=3):
+    news_list = []
+    try:
+        rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
+        feed = feedparser.parse(rss_url)
+        KST = timezone(timedelta(hours=9))
+        now = datetime.now(KST)
+        for entry in feed.entries:
+            title = entry.get("title", "제목 없음")
+            link = entry.get("link", "#")
+            publisher = "Google News"
+            if " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title, publisher = parts[0], parts[1]
+            news_list.append({"date": now.strftime("%m/%d"), "title": title, "publisher": publisher, "linkUrl": link})
+            if len(news_list) >= display:
+                break
+    except Exception as e:
+        print(f"[뉴스 구글 RSS 예외]: {e}")
+    return news_list[:display]
+
 def fetch_naver_news_api(query, display=3):
-    return [{"date": "11/06", "title": "지씨셀 관련 주요 뉴스 항목", "publisher": "네이버뉴스", "linkUrl": "#"}]
+    news_list = []
+    primary_query = query.split(" OR ")[0] if " OR " in query else query
+    news_list = fetch_google_news_fallback(primary_query, display)
+    
+    if not news_list:
+        encoded_query = requests.utils.quote(primary_query)
+        api_hub_url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
+        client_id = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID")
+        client_secret = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NAVER_CLIENT_SECRET")
+        
+        if client_id and client_secret:
+            try:
+                headers = {"X-NCP-APIGW-API-KEY-ID": client_id, "X-NCP-APIGW-API-KEY": client_secret, "Accept": "application/json"}
+                res = requests.get(api_hub_url, headers=headers, timeout=4)
+                if res.status_code == 200:
+                    items = res.json().get("items", [])
+                    KST = timezone(timedelta(hours=9))
+                    now = datetime.now(KST)
+                    for item in items:
+                        clean_title = re.sub(r'<[^>]*?>', '', item.get("title", "제목 없음"))
+                        news_list.append({"date": now.strftime("%m/%d"), "title": clean_title, "publisher": "네이버뉴스", "linkUrl": item.get("link", "#")})
+                        if len(news_list) >= display:
+                            break
+            except Exception as e:
+                print(f"[네이버 뉴스 API 예외]: {e}")
+
+    return news_list[:display]
 
 def fetch_nbi_news(display=3):
-    return [{"date": "11/06", "title": "글로벌 바이오 섹터 동향", "publisher": "Yahoo Finance", "linkUrl": "#"}]
+    return fetch_google_news_fallback("나스닥 바이오", display)
 
 def generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_ratio, fx_val, fx_ratio, company_news):
     default_analysis = {
         "is_ai": False,
-        "internal": f"지씨셀 종가 {price}원({ratio}), 거래량 {volume}주 기록. 기관 및 외국인 수급 변동.",
+        "internal": f"지씨셀 종가 {price}원({ratio}), 거래량 {volume}주 기록.",
         "supply": f"나스닥 바이오(NBI) 지수({nbi_val}, {nbi_ratio}) 연동 동향 반영.",
         "macro": f"원/달러 환율({fx_val}, {fx_ratio}) 변동성 반영."
     }
@@ -163,7 +216,8 @@ def generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_r
         return default_analysis
     try:
         client = genai.Client()
-        prompt = f"상장 제약바이오 기업 IR 분석가 관점에서 팩트 위주로 요약 JSON 출력 (internal, supply, macro 키 포함): 주가 {price}"
+        news_titles = ", ".join([n['title'] for n in company_news]) if company_news else "관련 주요 뉴스 없음"
+        prompt = f"상장 제약바이오 기업 IR 분석가 관점에서 팩트 위주로 요약 JSON 출력 (internal, supply, macro 키 포함): 주가 {price}, 뉴스: {news_titles}"
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -184,8 +238,19 @@ def generate_data():
     nbi_val, nbi_ratio = "7,463.68", "+2.71%"
     fx_val, fx_ratio = "1,340.38", "-2.52원"
     
-    company_news = fetch_naver_news_api("지씨셀", 3)
+    news_gc = fetch_naver_news_api("지씨셀", 3)
+    news_artiva = fetch_naver_news_api("아티바", 3)
+    
+    combined_company_news = []
+    seen_titles = set()
+    for item in news_gc + news_artiva:
+        if item['title'] not in seen_titles:
+            seen_titles.add(item['title'])
+            combined_company_news.append(item)
+    company_news = combined_company_news[:3]
+
     nbi_news = fetch_nbi_news(3)
+
     analysis_data = generate_gemini_analysis(price, ratio, volume, investor_info, nbi_val, nbi_ratio, fx_val, fx_ratio, company_news)
 
     KST = timezone(timedelta(hours=9))
