@@ -119,8 +119,8 @@ def get_market_indices_with_cli_and_fallback():
     kq26_val, kq26_ratio = "7,264.11", "-1.42%"
     success = False
 
-    # 1순위: 키움 REST API 호출
-    idx_data = kiwoom_client.request("domestic/market/index", {"market_type": "pharmacy", "code": "120"})
+    # 1순위: 키움 REST API 호출 (코스닥 제약 업종 코드 '120' 파라미터 전달)
+    idx_data = kiwoom_client.request("domestic/market/index", {"code": "120"})
     if idx_data and isinstance(idx_data, dict):
         try:
             if "kospi" in idx_data and "kosdaq" in idx_data:
@@ -132,14 +132,14 @@ def get_market_indices_with_cli_and_fallback():
                 kosdaq_chg = float(idx_data['kosdaq'].get('change_rate', idx_data['kosdaq'].get('vsrt', 0)))
                 kosdaq_ratio = f"{'+' if kosdaq_chg > 0 else ''}{kosdaq_chg:.2f}%"
 
-                ph_data = idx_data.get("pharmacy", idx_data.get("120", {}))
+                ph_data = idx_data.get("pharmacy", idx_data.get("120", idx_data.get("kq26", {})))
                 if ph_data:
                     kq26_val = f"{float(ph_data.get('value', ph_data.get('prpr', 0))):,.2f}"
                     kq26_chg = float(ph_data.get('change_rate', ph_data.get('vsrt', 0)))
                     kq26_ratio = f"{'+' if kq26_chg > 0 else ''}{kq26_chg:.2f}%"
                 success = True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"키움 지수 API 파싱 예외: {e}")
 
     # 2순위: 야후 파이낸스 백업
     if not success:
