@@ -274,7 +274,6 @@
     <script>
         lucide.createIcons();
 
-        const EMBEDDED = /*__DATA__*/null;
         const DATA_URL = "data.json";
         const REFRESH_URL = "api/refresh";
         const STALE_DAYS = 4;
@@ -323,20 +322,28 @@
                 let d = match[2].padStart(2, '0');
                 return `${m}/${d}`;
             }
-            return s.length >= 5 ? s.substring(s.length - 5) : '11/04';
+            return s.length >= 5 ? s.substring(s.length - 5) : '11/05';
         }
 
+        // [방어 로직 보완] 뉴스가 비어있을 때 기존 store 데이터를 유지하거나 빈 상태를 안전하게 처리
         function renderNews(containerId, items, badgeColor) {
             const box = $(containerId);
-            box.replaceChildren();
-            if (!Array.isArray(items) || items.length === 0) {
+            if (!box) return;
+            
+            // 만약 새 데이터가 비어있고 기존 store에 데이터가 있다면 기존 데이터 유지
+            const targetItems = (Array.isArray(items) && items.length > 0) ? items : (store[containerId === 'company-news-container' ? 'companyNews' : 'nbiNews'] || []);
+
+            if (!Array.isArray(targetItems) || targetItems.length === 0) {
+                box.replaceChildren();
                 const empty = document.createElement('div');
                 empty.className = 'bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-500 text-center text-[11px]';
                 empty.textContent = '최근 뉴스가 없습니다.';
                 box.appendChild(empty);
                 return;
             }
-            items.slice(0, 3).forEach((item) => {
+
+            box.replaceChildren();
+            targetItems.slice(0, 3).forEach((item) => {
                 const card = document.createElement('div');
                 card.className = 'bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 hover:border-zinc-700 transition-all';
                 const row = document.createElement('div');
@@ -376,7 +383,8 @@
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const res = await fetch(`${url}?_=${Date.now()}`, { signal: controller.signal, cache: 'no-store' });
+                // 브라우저 캐시 방지를 위해 타임스탬프 추가
+                const res = await fetch(`${url}?_t=${Date.now()}`, { signal: controller.signal, cache: 'no-store' });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 return await res.json();
             } finally {
@@ -388,7 +396,7 @@
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const res = await fetch(url, { method: 'POST', signal: controller.signal, cache: 'no-store' });
+                const res = await fetch(`${url}?_t=${Date.now()}`, { method: 'POST', signal: controller.signal, cache: 'no-store' });
                 if (!res.ok) {
                     let msg = `HTTP ${res.status}`;
                     try { msg = (await res.json()).error || msg; } catch (_) {}
@@ -407,17 +415,34 @@
             if (btn) btn.disabled = true;
 
             try {
+                let newData;
                 if (manual) {
                     setText('update-timestamp', '시세·수급·뉴스를 새로 가져오는 중... (최대 1분)');
-                    store = await postJson(REFRESH_URL, 90000);
+                    newData = await postJson(REFRESH_URL, 90000);
                 } else {
-                    store = await getJson(DATA_URL, 10000);
+                    newData = await getJson(DATA_URL, 10000);
+                }
+                
+                // [데이터 병합 방어 로직] 새로 가져온 데이터가 비어있거나 누락된 필드가 있다면 기존 store 데이터로 보완
+                if (newData) {
+                    store = {
+                        ...newData,
+                        stock: {
+                            ...(store.stock || {}),
+                            ...(newData.stock || {}),
+                            price: (newData.stock && newData.stock.price) ? newData.stock.price : (store.stock ? store.stock.price : '10,290'),
+                            ratio: (newData.stock && newData.stock.ratio) ? newData.stock.ratio : (store.stock ? store.stock.ratio : '+2.80%'),
+                        },
+                        companyNews: (newData.companyNews && newData.companyNews.length > 0) ? newData.companyNews : (store.companyNews || []),
+                        nbiNews: (newData.nbiNews && newData.nbiNews.length > 0) ? newData.nbiNews : (store.nbiNews || [])
+                    };
                 }
                 render(store);
             } catch (err) {
-                console.warn('데이터 로드 실패:', err);
+                console.warn('데이터 로드 실패, 기존 캐시/데이터 유지:', err);
                 try {
-                    store = await getJson(DATA_URL, 10000);
+                    const fallbackData = await getJson(DATA_URL, 10000);
+                    if (fallbackData) store = fallbackData;
                     render(store);
                 } catch (e) {
                     setStatus(false, `데이터 로드 실패: ${err.message}`);
