@@ -6,11 +6,11 @@ app = Flask(__name__)
 
 def fetch_market_index(market_type="kospi"):
     """
-    야후 파이낸스(yfinance)를 통해 주요 지수 및 환율 데이터를 수집합니다.
-    - 코스피: ^KS11
-    - 코스닥: ^KQ11
-    - 원/달러 환율: USDKRW=X
-    - 나스닥 바이오: ^NBI
+    [데이터 소스 조건]
+    - 코스피: 키움증권 REST API (1차) / 야후 파이낸스 ^KS11 (2차 Fallback)
+    - 코스닥: 키움증권 REST API (1차) / 야후 파이낸스 ^KQ11 (2차 Fallback)
+    - 원/달러 환율: 야후 파이낸스 USDKRW=X
+    - 나스닥 바이오(NBI): 야후 파이낸스 ^NBI
     """
     try:
         ticker_map = {
@@ -34,9 +34,10 @@ def fetch_market_index(market_type="kospi"):
 
 def fetch_gccell_data():
     """
-    지씨셀(종목코드: 144510) 주가 및 투자자별 수급현황 수집
-    - 1차: 키움증권 REST API (종목 시세 및 투자자별 매매동향 조회)
-    - 2차(Fallback): 야후 파이낸스(144510.KQ) 주가 조회 및 수급 기본값 처리
+    [데이터 소스 조건]
+    - 지씨셀(144510) 주가 및 투자자별 수급 현황
+    - 1차: 키움증권 REST API (종목 시세 및 투자자별 매매동향)
+    - 2차(Fallback): 야후 파이낸스 (144510.KQ) 주가 조회 및 수급 기본값 처리
     """
     try:
         # [키움증권 API 연동 구간 - 종목코드 144510]
@@ -45,11 +46,9 @@ def fetch_gccell_data():
         # if kiwoom_price and kiwoom_supply:
         #     return kiwoom_price, kiwoom_supply
         
-        # 현재 키움 API 미연결 상태이므로 예외 발생 후 Fallback 유도
         raise Exception("키움 API 지씨셀 시세 및 수급 미연결")
 
     except Exception as kiwoom_err:
-        # Fallback: 야후 파이낸스(yfinance)를 통한 지씨셀 코스닥 주가 조회
         try:
             df = yf.Ticker("144510.KQ").history(period="2d")
             if not df.empty:
@@ -62,7 +61,6 @@ def fetch_gccell_data():
             print(f"[지씨셀 144510 수집 실패]: {yf_err}")
             current_price, change_rate = 0.0, 0.0
             
-        # 키움 미연결 시 수급 데이터 기본 구조 (추후 키움 API 연동 시 대체됨)
         supply_data = {
             "foreign": {"net": "-", "recent": "-"},
             "institution": {"net": "-", "recent": "-"},
@@ -79,9 +77,9 @@ def fetch_gccell_data():
 def index():
     return render_template('index.html')
 
-@app.route('/api/data')
-@app.route('/api/refresh')
-@app.route('/data.json')
+@app.route('/api/data', methods=['GET', 'POST'])
+@app.route('/api/refresh', methods=['GET', 'POST'])
+@app.route('/data.json', methods=['GET', 'POST'])
 def api_data():
     kospi_price, kospi_rate = fetch_market_index("kospi")
     kosdaq_price, kosdaq_rate = fetch_market_index("kosdaq")
