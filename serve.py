@@ -106,7 +106,7 @@ def get_stock_data_with_cli_and_fallback(code="144510"):
             if not hist.empty:
                 p_val = hist['Close'].iloc[-1]
                 if p_val == p_val:
-                    p_prev = hist['Close'].iloc[-2] if len(hist) > 1 and hist['Close'].iloc[-2] == hist['Close'].iloc[-2] else p_val
+                    p_prev = hist['Close'].iloc[-2] if len(hist) > 1 else p_val
                     chg_val = ((p_val - p_prev) / p_prev) * 100 if p_prev else 0.0
                     vol_val = int(hist['Volume'].iloc[-1]) if hist['Volume'].iloc[-1] == hist['Volume'].iloc[-1] else 0
                     price = f"{p_val:,.0f}"
@@ -157,7 +157,7 @@ def get_market_indices_with_cli_and_fallback():
             if not k_hist.empty:
                 kp_val = k_hist['Close'].iloc[-1]
                 if kp_val == kp_val:
-                    kp_prev = k_hist['Close'].iloc[-2] if len(k_hist) > 1 and hist_prev_check := True else kp_val
+                    kp_prev = k_hist['Close'].iloc[-2] if len(k_hist) > 1 else kp_val
                     kp_chg = ((kp_val - kp_prev) / kp_prev) * 100 if kp_prev else 0.0
                     kospi_val = f"{kp_val:,.2f}"
                     kospi_ratio = f"{'+' if kp_chg > 0 else ''}{kp_chg:.2f}%"
