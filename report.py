@@ -98,7 +98,7 @@ def get_market_indices_with_cli_and_fallback():
             k_hist = kospi_ticker.history(period="2d")
             if not k_hist.empty:
                 kp_val = k_hist['Close'].iloc[-1]
-                if kp_val == kp_val and kp_val < 5000:
+                if kp_val == kp_val:
                     kp_prev = k_hist['Close'].iloc[-2] if len(k_hist) > 1 and k_hist['Close'].iloc[-2] == k_hist['Close'].iloc[-2] else kp_val
                     kp_chg = ((kp_val - kp_prev) / kp_prev) * 100 if kp_prev else 0.0
                     kospi_val = f"{kp_val:,.2f}"
@@ -108,7 +108,7 @@ def get_market_indices_with_cli_and_fallback():
             kq_hist = kosdaq_ticker.history(period="2d")
             if not kq_hist.empty:
                 kqp_val = kq_hist['Close'].iloc[-1]
-                if kqp_val == kqp_val and kqp_val < 3000:
+                if kqp_val == kqp_val:
                     kqp_prev = kq_hist['Close'].iloc[-2] if len(kq_hist) > 1 and kq_hist['Close'].iloc[-2] == kq_hist['Close'].iloc[-2] else kqp_val
                     kqp_chg = ((kqp_val - kqp_prev) / kqp_prev) * 100 if kqp_prev else 0.0
                     kosdaq_val = f"{kqp_val:,.2f}"
@@ -119,12 +119,7 @@ def get_market_indices_with_cli_and_fallback():
     return (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio)
 
 def fetch_investor_data_multi_fallback(code="144510"):
-    """
-    수급 수집 3단계 파이프라인 (정확한 CLI 커맨드 'investor-by-stock' 적용):
-    1차: 키움 공식 CLI (`investor-by-stock`)
-    2차: 네이버 금융 크롤링 백업
-    3차: 네이버 API HUB 수급 API 백업
-    """
+    """수급 수집 3단계 파이프라인 (키움 CLI -> 네이버 금융 크롤링)"""
     investor = {
         "foreign": "-1,250",
         "organ": "+3,420",
@@ -137,7 +132,6 @@ def fetch_investor_data_multi_fallback(code="144510"):
     }
     success = False
 
-    # --- 1차: 키움 공식 CLI (올바른 커맨드 적용) ---
     cli_inv = run_kwcli_json(["kiwoomcli", "domestic", "stocks", "investor-by-stock", f"--code={code}"])
     if cli_inv and isinstance(cli_inv, dict):
         try:
@@ -152,12 +146,11 @@ def fetch_investor_data_multi_fallback(code="144510"):
         except Exception:
             pass
 
-    # --- 2차: 네이버 금융 크롤링 ---
     if not success:
         try:
             url = f"https://finance.naver.com/item/frgn.naver?code={code}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": f"https://finance.naver.com/item/main.naver?code={code}"
             }
             res = requests.get(url, headers=headers, timeout=5)
@@ -200,14 +193,13 @@ def fetch_investor_data_multi_fallback(code="144510"):
                     investor["5d"]["foreign"] = f"{'+' if sum_5d_frn > 0 else ''}{sum_5d_frn:,}"
                     investor["5d"]["organ"] = f"{'+' if sum_5d_org > 0 else ''}{sum_5d_org:,}"
                     investor["5d"]["personal"] = f"{'+' if sum_5d_per > 0 else ''}{sum_5d_per:,}"
-                    success = True
         except Exception as e:
             print(f"네이버 수급 크롤링 백업 오류: {e}")
 
     return investor
 
 def fetch_naver_news_api(query, display=3):
-    """1차: NAVER API HUB 수집 (최근 2일/48시간 필터) -> 2차: 실패 시 구글 뉴스 RSS 백업"""
+    """NAVER API HUB 수집 -> 실패 시 구글 뉴스 RSS 백업"""
     news_list = []
     encoded_query = requests.utils.quote(query)
     url = f"https://naverapihub.apigw.ntruss.com/search/v1/news?query={encoded_query}&display=10&sort=date"
@@ -249,7 +241,6 @@ def fetch_naver_news_api(query, display=3):
                         dt_naive = dt.replace(tzinfo=None) if dt.tzinfo else dt
                         diff_hours = (now - dt_naive).total_seconds() / 3600
                         date_formatted = dt_naive.strftime("%m/%d")
-                        
                         if diff_hours > 48:
                             is_recent = False
                 except Exception:
@@ -274,7 +265,7 @@ def fetch_naver_news_api(query, display=3):
     return news_list[:display]
 
 def fetch_google_news_fallback(query, display=3):
-    """후순위 구글 뉴스 RSS 백업 수집 (최근 2일/48시간 필터 적용)"""
+    """구글 뉴스 RSS 백업 수집"""
     news_list = []
     try:
         rss_url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
@@ -323,10 +314,11 @@ def generate_data():
     (kospi_val, kospi_ratio), (kosdaq_val, kosdaq_ratio), (kq26_val, kq26_ratio) = get_market_indices_with_cli_and_fallback()
     investor_info = fetch_investor_data_multi_fallback("144510")
 
+    nbi_val, nbi_ratio = "7,463.68", "+2.71%"
+    fx_val, fx_ratio = "1,340.38", "-2.52원"
     try:
         nbi_ticker = yf.Ticker("^NBI")
         nbi_hist = nbi_ticker.history(period="2d")
-        nbi_val, nbi_ratio = "7,463.68", "+2.71%"
         if not nbi_hist.empty:
             np_val = nbi_hist['Close'].iloc[-1]
             if np_val == np_val:
@@ -335,9 +327,9 @@ def generate_data():
                 nbi_val = f"{np_val:,.2f}"
                 nbi_ratio = f"{'+' if np_chg > 0 else ''}{np_chg:.2f}%"
 
-        fx_ticker = yf.Ticker("KRW=X")
+        # 환율 표준 티커 USDKRW=X 적용
+        fx_ticker = yf.Ticker("USDKRW=X")
         fx_hist = fx_ticker.history(period="2d")
-        fx_val, fx_ratio = "1,340.38", "-2.52원"
         if not fx_hist.empty:
             fp_val = fx_hist['Close'].iloc[-1]
             if fp_val == fp_val:
@@ -384,7 +376,7 @@ def generate_data():
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    print("--- [정밀 반영 완료] 올바른 수급 커맨드 'investor-by-stock' 적용 ---")
+    print("--- [정밀 반영 완료] 올바른 수급 커맨드 'investor-by-stock' 및 USDKRW 환율 적용 ---")
 
 if __name__ == "__main__":
     generate_data()
