@@ -272,6 +272,7 @@
             <div class="flex space-x-2 pt-2">
                 <button onclick="closeEmailModal()" class="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 py-2.5 rounded-xl text-xs font-semibold transition-all">취소</button>
                 <button onclick="sendEmail()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-semibold transition-all shadow-lg shadow-emerald-950/50">메일 앱 열기</button>
+                <button onclick="copyRichEmail()" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-white py-2.5 rounded-xl text-xs font-semibold transition-all">하이퍼링크 본문 복사</button>
             </div>
         </div>
     </div>
@@ -521,9 +522,9 @@
         function openEmailModal() { $('email-modal').classList.remove('hidden'); }
         function closeEmailModal() { $('email-modal').classList.add('hidden'); }
 
-        function sendEmail() {
-            const email = $('recipient-email').value.trim();
-            const subject = $('email-subject').value;
+        // ---------- 메일 본문 (양식) ----------
+        // 구성: 1 주가·수급 / 2 3대 요인 분석 / 3 주요 뉴스(지씨셀+NBI 통합) / 4 업종 지수·매크로
+        function buildReport() {
             const d = store || {};
             const s = d.stock || {};
             const inv = s.investor || {};
@@ -531,54 +532,110 @@
             const m = d.macroIndices || {};
             const a = d.analysis || {};
             const v = (x, k = 'value') => (x && x[k]) || '-';
+            const nd = '데이터 없음';
+            const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '');
 
-            const list = (items) => (items && items.length)
-                ? items.slice(0, 3).map((n, i) => {
-                    const formattedDate = formatDateToMMDD(n.date);
-                    return `    ${i + 1}. [${formattedDate}] ${n.title} (${n.publisher || '뉴스'})\n      ${n.linkUrl || ''}`;
-                }).join('\n')
-                : '    최근 뉴스 없음';
+            // 뉴스: 지씨셀 + NBI 를 한 목록으로 합침 (각 최대 3건), 기사 1건 = 1줄
+            const news = [
+                ...(d.companyNews || []).slice(0, 3).map((n) => ({ ...n, tag: '지씨셀' })),
+                ...(d.nbiNews || []).slice(0, 3).map((n) => ({ ...n, tag: 'NBI' })),
+            ];
+            const newsText = news.length
+                ? news.map((n, i) => `   ${i + 1}. [${formatDateToMMDD(n.date)}] [${n.tag}] ${n.title} (${n.publisher || '뉴스'})${safeUrl(n.linkUrl) ? ' ▶ ' + n.linkUrl : ''}`).join('\n')
+                : '   최근 뉴스 없음';
+            const newsHtml = news.length
+                ? news.map((n) => {
+                    const t = esc(n.title);
+                    const link = safeUrl(n.linkUrl) ? `<a href="${esc(n.linkUrl)}">${t}</a>` : t;
+                    return `<li>[${esc(formatDateToMMDD(n.date))}] [${n.tag}] ${link} (${esc(n.publisher || '뉴스')})</li>`;
+                }).join('')
+                : '<li>최근 뉴스 없음</li>';
 
-            const body =
+            const fx = (m.usdKrw && (m.usdKrw.change || m.usdKrw.ratio)) || '-';
+            const rows = [
+                ['나스닥 바이오(NBI)', v(m.nbi), v(m.nbi, 'ratio')],
+                ['코스닥 제약(KQ26)', v(m.kq26), v(m.kq26, 'ratio')],
+                ['코스피', v(m.kospi), v(m.kospi, 'ratio')],
+                ['코스닥', v(m.kosdaq), v(m.kosdaq, 'ratio')],
+                ['원/달러', v(m.usdKrw), fx],
+            ];
+            const stockRows = [
+                ['주가', `${s.price || '-'} (${s.ratio || '-'})`],
+                ['거래량', s.volume || '-'],
+                ['외국인 순매수', `${inv.foreign || '-'} (5일 ${f5.foreign || '-'})`],
+                ['기관 순매수', `${inv.organ || '-'} (5일 ${f5.organ || '-'})`],
+                ['개인 순매수', `${inv.personal || '-'} (5일 ${f5.personal || '-'})`],
+            ];
+            const ana = [
+                ['1. 회사', a.internal || nd],
+                ['2. 업계 (코스닥 제약/NBI)', a.supply || nd],
+                ['3. 매크로 (코스피/코스닥)', a.macro || nd],
+            ];
+
+            const text =
 `[지씨셀 IR 데일리 브리핑 및 주가변동 3대 요인 리포트]
 ====================================
-기준: ${d.updatedAt || '-'}
+기준: ${d.updatedAt || '-'}${s.marketStatus ? ' / ' + s.marketStatus : ''}
 
 1. [지씨셀 수급 및 주가]
-   - 주가: ${s.price || '-'} (${s.ratio || '-'})
-   - 거래량: ${s.volume || '-'}
-   - 외국인 순매수: ${inv.foreign || '-'} (5일 ${f5.foreign || '-'})
-   - 기관 순매수: ${inv.organ || '-'} (5일 ${f5.organ || '-'})
-   - 개인 순매수: ${inv.personal || '-'} (5일 ${f5.personal || '-'})
+${stockRows.map(([k, x]) => `   - ${k}: ${x}`).join('\n')}
 
-2. [금일 주요 이슈 뉴스 (3선)]
-${list(d.companyNews)}
+2. [IR 주가변동 3대 핵심 요인 분석]
+${ana.map(([k, x]) => `   - ${k}: ${x}`).join('\n')}
 
-3. [IR 주가변동 3대 핵심 요인 분석]
-   - 1. 기사 기반 기업 측면: ${a.internal || '-'}
-   - 2. 업계 기반 (코스닥제약/NBI): ${a.supply || '-'}
-   - 3. 매크로 기반 (증시/환율): ${a.macro || '-'}
+3. [주요 뉴스 (지씨셀·NBI)]
+${newsText}
 
 4. [업종 지수 및 매크로 지표]
-   - 나스닥 바이오(NBI): ${v(m.nbi)} (${v(m.nbi, 'ratio')})
-   - 코스닥 제약(KQ26): ${v(m.kq26)} (${v(m.kq26, 'ratio')})
-   - 코스피: ${v(m.kospi)} (${v(m.kospi, 'ratio')})
-   - 코스닥: ${v(m.kosdaq)} (${v(m.kosdaq, 'ratio')})
-   - 원/달러: ${v(m.usdKrw)} (${(m.usdKrw && (m.usdKrw.change || m.usdKrw.ratio)) || '-'})
-
-5. [NBI 포함 주요 종목 뉴스 (3선)]
-${list(d.nbiNews)}
+${rows.map(([k, x, r]) => `   - ${k}: ${x} (${r})`).join('\n')}
 
 ====================================
 지씨셀 IR 데일리 브리핑 대시보드에서 생성되었습니다.`;
 
-            const link = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            const html =
+`<div style="font-family:'Malgun Gothic',Arial,sans-serif;font-size:14px;line-height:1.6;color:#111">
+<h3 style="margin:0 0 4px">지씨셀 IR 데일리 브리핑 및 주가변동 3대 요인 리포트</h3>
+<div style="color:#666">기준: ${esc(d.updatedAt || '-')}${s.marketStatus ? ' / ' + esc(s.marketStatus) : ''}</div>
+<h4 style="margin:14px 0 4px">1. 지씨셀 수급 및 주가</h4>
+<ul style="margin:0">${stockRows.map(([k, x]) => `<li>${esc(k)}: ${esc(x)}</li>`).join('')}</ul>
+<h4 style="margin:14px 0 4px">2. IR 주가변동 3대 핵심 요인 분석</h4>
+<ul style="margin:0">${ana.map(([k, x]) => `<li><b>${esc(k)}</b>: ${esc(x)}</li>`).join('')}</ul>
+<h4 style="margin:14px 0 4px">3. 주요 뉴스 (지씨셀·NBI)</h4>
+<ol style="margin:0">${newsHtml}</ol>
+<h4 style="margin:14px 0 4px">4. 업종 지수 및 매크로 지표</h4>
+<ul style="margin:0">${rows.map(([k, x, r]) => `<li>${esc(k)}: ${esc(x)} (${esc(r)})</li>`).join('')}</ul>
+<div style="margin-top:14px;color:#888;font-size:12px">지씨셀 IR 데일리 브리핑 대시보드에서 생성되었습니다.</div>
+</div>`;
+            return { text, html };
+        }
+
+        // 메일 앱 열기: 일반 텍스트 본문 (뉴스는 한 줄에 제목 + 링크 주소)
+        function sendEmail() {
+            const email = $('recipient-email').value.trim();
+            const subject = $('email-subject').value;
+            const { text } = buildReport();
+            const link = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
             const tmp = document.createElement('a');
             tmp.href = link;
             document.body.appendChild(tmp);
             tmp.click();
             document.body.removeChild(tmp);
             closeEmailModal();
+        }
+
+        // 하이퍼링크 본문 복사: 뉴스 제목에 링크가 걸린 서식 그대로 복사 -> 메일 본문에 붙여넣기(Ctrl+V)
+        async function copyRichEmail() {
+            const { text, html } = buildReport();
+            try {
+                await navigator.clipboard.write([new ClipboardItem({
+                    'text/html': new Blob([html], { type: 'text/html' }),
+                    'text/plain': new Blob([text], { type: 'text/plain' }),
+                })]);
+                alert('복사했습니다. 메일 본문에 붙여넣기(Ctrl+V) 하세요. 뉴스 제목에 링크가 걸려 있습니다.');
+            } catch (e) {
+                alert('복사에 실패했습니다. 브라우저 권한을 확인하거나 "메일 앱 열기"를 사용하세요.');
+            }
         }
 
         window.addEventListener('DOMContentLoaded', () => fetchLiveData(false));
