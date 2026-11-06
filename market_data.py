@@ -354,6 +354,10 @@ def investing_quote(slug):
     print(f"Investing.com({host}) {slug}: {q['value']} ({q['ratio']})")
     return q
 
+_AI_CACHE = {"prompt": None, "out": None, "fail_until": 0.0}
+AI_COOLDOWN = 600  # 429 이후 10분간 AI 호출 중지
+
+
 def ai_analysis(data):
     """실제 수집된 데이터만 근거로 3줄 요약. 키/라이브러리가 없으면 None (-> 숫자 기반 자동 문구)."""
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -412,16 +416,28 @@ def ai_analysis(data):
         '반드시 JSON 한 개로만 답하세요: {"internal": "...", "supply": "...", "macro": "..."}\n\n'
         + json.dumps(facts, ensure_ascii=False)
     )
+    # 같은 데이터면 직전 AI 요약을 그대로 쓴다 (새로고침마다 Gemini 를 부르지 않도록)
+    if _AI_CACHE["prompt"] == prompt and _AI_CACHE["out"]:
+        return dict(_AI_CACHE["out"])
+    # 한도 초과(429) 직후에는 잠시 호출을 멈춘다
+    if time.time() < _AI_CACHE["fail_until"]:
+        raise RuntimeError("AI 요약 한도 초과로 잠시 중지 중 (자동 문구 사용)")
     try:
         client = genai.Client(api_key=key, http_options={"timeout": 30000})
     except Exception:  # noqa: BLE001
         client = genai.Client(api_key=key)
-    resp = client.models.generate_content(model=os.environ.get("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
+    try:
+        resp = client.models.generate_content(model=os.environ.get("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
+    except Exception as e:  # noqa: BLE001
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            _AI_CACHE["fail_until"] = time.time() + AI_COOLDOWN
+        raise
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
     d = json.loads(text)
     out = {k: str(d.get(k, "")).strip() for k in ("internal", "supply", "macro")}
     if not all(out.values()):
         raise RuntimeError("AI 응답 형식 오류")
+    _AI_CACHE["prompt"], _AI_CACHE["out"] = prompt, dict(out)
     return out
 
 
