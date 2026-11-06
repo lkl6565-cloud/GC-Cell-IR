@@ -100,6 +100,23 @@ def _safe(fn, default, label, warnings):
         return default
 
 
+# 종목별 표는 호출 수가 많아 따로 캐시한다 (장중 60초 / 그 외 5분). 전 종목이 성공한 결과만 저장.
+_peer_cache = {"ts": 0.0, "rows": None}
+PEER_TTL = 300
+PEER_TTL_LIVE = 60
+
+
+def _peers(now, warnings):
+    hm = now.hour * 60 + now.minute
+    ttl = PEER_TTL_LIVE if md.MARKET_OPEN <= hm < md.MARKET_CLOSE else PEER_TTL
+    if _peer_cache["rows"] and time.time() - _peer_cache["ts"] < ttl:
+        return _peer_cache["rows"]
+    rows = md.peer_table(_kiwoom(), now, warnings)
+    if rows and all(r.get("price") not in (None, "-") for r in rows):
+        _peer_cache["ts"], _peer_cache["rows"] = time.time(), rows
+    return rows
+
+
 def build_payload():
     """시세·뉴스를 새로 수집한다. 한 항목이 실패해도 나머지는 계속 만든다."""
     now = datetime.now(KST)
@@ -111,7 +128,7 @@ def build_payload():
     nbi_news = _safe(lambda: ns.nbi_news(3, exclude=company_news), [], "NBI 뉴스", warnings)
 
     market_news = _safe(ns.market_news, [], "시황 뉴스", warnings)
-    peers = _safe(lambda: md.peer_table(_kiwoom(), now, warnings), [], "종목별 주가·수급", warnings)
+    peers = _safe(lambda: _peers(now, warnings), [], "종목별 주가·수급", warnings)
 
     data = {
         "updatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
