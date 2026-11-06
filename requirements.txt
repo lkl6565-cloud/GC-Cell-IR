@@ -1,6 +1,0 @@
-google-genai
-requests
-beautifulsoup4
-feedparser
-yfinance
-python-dotenv
