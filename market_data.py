@@ -120,8 +120,8 @@ class Kiwoom:
         except Exception:  # noqa: BLE001
             pass
 
-def stock_block(kw):
-    d = kw.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": CODE})
+def stock_block(kw, code=CODE):
+    d = kw.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": code})
     price, ratio, vol = num(d.get("cur_prc")), num(d.get("flu_rt")), num(d.get("trde_qty"))
     if price is None or ratio is None:
         raise RuntimeError(f"ka10001 응답 필드 확인 필요: {list(d)[:12]}")
@@ -133,9 +133,9 @@ def stock_block(kw):
     }
 
 
-def daily_bars(kw, ymd):
+def daily_bars(kw, ymd, code=CODE):
     """ka10081 주식일봉차트: 종목코드 '144510'(접미사 없음) = KRX 정규장 기준 일봉. 최신순 정렬."""
-    d = kw.post("/api/dostk/chart", "ka10081", {"stk_cd": CODE, "base_dt": ymd, "upd_stkpc_tp": "1"})
+    d = kw.post("/api/dostk/chart", "ka10081", {"stk_cd": code, "base_dt": ymd, "upd_stkpc_tp": "1"})
     rows = [r for r in (d.get("stk_dt_pole_chart_qry") or []) if r.get("dt") and num(r.get("cur_prc")) is not None]
     if not rows:
         raise RuntimeError(f"ka10081 응답에 일봉이 없음: {list(d)[:8]}")
@@ -157,7 +157,7 @@ def _bar_quote(rows, i, status):
 MARKET_OPEN, MARKET_CLOSE = 9 * 60, 15 * 60 + 30  # 한국시간 09:00 / 15:30 (분 단위)
 
 
-def price_block(kw, now):
+def price_block(kw, now, code=CODE):
     """한국시간 기준 가격 규칙
       1) 00:00~09:00        : 전일 종가
       2) 09:00~15:30        : 당일 실시간 현재가
@@ -165,14 +165,14 @@ def price_block(kw, now):
     휴장일(오늘 일봉이 없음)에는 항상 직전 거래일 종가를 보여준다."""
     ymd = now.strftime("%Y%m%d")
     hm = now.hour * 60 + now.minute
-    rows = daily_bars(kw, ymd)
+    rows = daily_bars(kw, ymd, code)
     today_bar = rows[0]["dt"] == ymd
 
     if hm < MARKET_OPEN:
         return _bar_quote(rows, 1 if today_bar else 0, "전일 종가 (장 시작 전)")
     if hm < MARKET_CLOSE:
         if today_bar or hm < MARKET_OPEN + 5:  # 개장 직후 몇 분은 일봉 생성 전일 수 있음
-            st = stock_block(kw)
+            st = stock_block(kw, code)
             st["marketStatus"] = "장중 (실시간)"
             return st
         return _bar_quote(rows, 0, "전 거래일 종가 (휴장)")
@@ -181,11 +181,11 @@ def price_block(kw, now):
     return _bar_quote(rows, 0, "전 거래일 종가 (휴장 또는 집계 지연)")
 
 
-def investor_rows(kw, ymd):
+def investor_rows(kw, ymd, code=CODE):
     d = kw.post(
         "/api/dostk/stkinfo",
         "ka10059",
-        {"dt": ymd, "stk_cd": CODE, "amt_qty_tp": "1", "trde_tp": "0", "unit_tp": "1000"},
+        {"dt": ymd, "stk_cd": code, "amt_qty_tp": "1", "trde_tp": "0", "unit_tp": "1000"},
     )
     rows = d.get("stk_invsr_orgn") or []
     if not rows:
@@ -444,6 +444,48 @@ def analysis_block(data):
         "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}."
         + (f" 시황: {data['marketNews'][0]['title']}" if data.get("marketNews") else ""),
     }
+
+
+# ── 종목별 주가·수급 표 (녹십자 계열) ─────────────────────────────
+PEERS_DEFAULT = "녹십자홀딩스:005250,녹십자:006280,녹십자웰빙:234690,지씨지놈:340450,GC메디아이:032620,녹십자엠에스:142280"
+
+
+def peer_list():
+    """.env 의 PEER_STOCKS(이름:코드,이름:코드 ...)로 바꿀 수 있다. 지씨셀(144510)은 항상 맨 위 별도 행."""
+    raw = os.environ.get("PEER_STOCKS") or PEERS_DEFAULT
+    out = []
+    for part in raw.split(","):
+        if ":" in part:
+            n, c = part.rsplit(":", 1)
+            if n.strip() and c.strip().isdigit():
+                out.append((n.strip(), c.strip()))
+    return out
+
+
+def peer_row(kw, now, name, code):
+    ymd = now.strftime("%Y%m%d")
+    q = price_block(kw, now, code)
+    row = {"name": name, "code": code, "price": q["price"], "ratio": q["ratio"], "volume": q["volume"]}
+    try:  # 수급 조회가 실패해도 시세 행은 보여준다
+        inv = investor_block(investor_rows(kw, ymd, code))
+        row["investor"] = {k: inv[k] for k in ("foreign", "organ", "personal")}
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] {name} 수급 실패: {e}", file=sys.stderr)
+    return row
+
+
+def peer_table(kw, now, warnings=None):
+    """종목별로 따로 실패 처리: 한 종목이 실패하면 그 행만 '-' 로 남긴다."""
+    rows = []
+    for name, code in peer_list():
+        try:
+            rows.append(peer_row(kw, now, name, code))
+        except Exception as e:  # noqa: BLE001
+            print(f"[경고] {name}({code}) 조회 실패: {e}", file=sys.stderr)
+            if warnings is not None:
+                warnings.append(f"{name}({code}) 조회 실패: {str(e)[:100]}")
+            rows.append({"name": name, "code": code, "price": "-", "ratio": "-", "volume": "-"})
+    return rows
 
 
 def collect_market(kw, now):
