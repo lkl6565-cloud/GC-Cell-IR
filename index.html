@@ -619,70 +619,46 @@
                 ...(d.nbiNews || []).slice(0, 3).map((n) => ({ ...n, tag: 'NBI' })),
             ];
             const newsText = news.length
-                ? news.map((n, i) => `   ${i + 1}. [${formatDateToMMDD(n.date)}] [${n.tag}] ${n.title} (${n.publisher || '뉴스'})${safeUrl(n.linkUrl) ? ' ▶ ' + n.linkUrl : ''}`).join('\n')
+                ? news.map((n) => `   [${formatDateToMMDD(n.date)}] [${n.tag}] ${n.title} (${n.publisher || '뉴스'})${safeUrl(n.linkUrl) ? ' ▶ ' + n.linkUrl : ''}`).join('\n')
                 : '   최근 뉴스 없음';
             const newsHtml = news.length
                 ? news.map((n) => {
                     const t = esc(n.title);
                     const link = safeUrl(n.linkUrl) ? `<a href="${esc(n.linkUrl)}">${t}</a>` : t;
-                    return `<li>[${esc(formatDateToMMDD(n.date))}] [${n.tag}] ${link} (${esc(n.publisher || '뉴스')})</li>`;
+                    return `<div>[${esc(formatDateToMMDD(n.date))}] [${n.tag}] ${link} (${esc(n.publisher || '뉴스')})</div>`;
                 }).join('')
-                : '<li>최근 뉴스 없음</li>';
+                : '<div>최근 뉴스 없음</div>';
 
-            const fx = (m.usdKrw && (m.usdKrw.change || m.usdKrw.ratio)) || '-';
-            const rows = [
-                ['나스닥 바이오(NBI)', v(m.nbi), v(m.nbi, 'ratio')],
-                ['코스닥 제약(KQ26)', v(m.kq26), v(m.kq26, 'ratio')],
-                ['코스피', v(m.kospi), v(m.kospi, 'ratio')],
-                ['코스닥', v(m.kosdaq), v(m.kosdaq, 'ratio')],
-                ['원/달러', v(m.usdKrw), fx],
-            ];
-            const stockRows = [
-                ['주가', `${s.price || '-'} (${s.ratio || '-'})`],
-                ['거래량', s.volume || '-'],
-                ['외국인 순매수', `${inv.foreign || '-'} (5일 ${f5.foreign || '-'})`],
-                ['기관 순매수', `${inv.organ || '-'} (5일 ${f5.organ || '-'})`],
-                ['개인 순매수', `${inv.personal || '-'} (5일 ${f5.personal || '-'})`],
-            ];
             const ana = [
                 ['1. 회사', a.internal || nd],
                 ['2. 업계 (코스닥 제약/NBI)', a.supply || nd],
                 ['3. 매크로 (코스피/코스닥)', a.macro || nd],
             ];
 
+            // 첫 줄: 금일 종가 지씨셀 10,100원 (▼ 0.98%), 일거래량 54,444주
+            const st = String(s.marketStatus || '');
+            const label = st.includes('장중') ? '현재가' : (st.includes('금일') ? '금일 종가' : '전 거래일 종가');
+            const pctRaw = String(s.ratio || '');
+            const pctNum = parseFloat(pctRaw);
+            const arrow = Number.isFinite(pctNum) ? (pctNum > 0 ? '▲ ' : (pctNum < 0 ? '▼ ' : '')) : '';
+            const head = `${label} 지씨셀 ${s.price || '-'} (${pctRaw ? arrow + pctRaw.replace(/^[+-]/, '') : '-'}), 일거래량 ${s.volume || '-'}`;
+
             const text =
-`[지씨셀 IR 일일보고 및 주가변동 3대 요인 리포트]
-====================================
-기준: ${d.updatedAt || '-'}${s.marketStatus ? ' / ' + s.marketStatus : ''}
+`${head}
 
-1. [지씨셀 수급 및 주가]
-${stockRows.map(([k, x]) => `   - ${k}: ${x}`).join('\n')}
+- 주요 변동요인
+${ana.map(([k, x]) => `   ${k}: ${x}`).join('\n')}
 
-2. [IR 주가변동 3대 핵심 요인 분석]
-${ana.map(([k, x]) => `   - ${k}: ${x}`).join('\n')}
-
-3. [주요 뉴스 (지씨셀·NBI)]
-${newsText}
-
-4. [업종 지수 및 매크로 지표]
-${rows.map(([k, x, r]) => `   - ${k}: ${x} (${r})`).join('\n')}
-
-====================================
-지씨셀 IR 일일보고 대시보드에서 생성되었습니다.`;
+- 주요 뉴스
+${newsText}`;
 
             const html =
-`<div style="font-family:'Malgun Gothic',Arial,sans-serif;font-size:14px;line-height:1.6;color:#111">
-<h3 style="margin:0 0 4px">지씨셀 IR 일일보고 및 주가변동 3대 요인 리포트</h3>
-<div style="color:#666">기준: ${esc(d.updatedAt || '-')}${s.marketStatus ? ' / ' + esc(s.marketStatus) : ''}</div>
-<h4 style="margin:14px 0 4px">1. 지씨셀 수급 및 주가</h4>
-<ul style="margin:0">${stockRows.map(([k, x]) => `<li>${esc(k)}: ${esc(x)}</li>`).join('')}</ul>
-<h4 style="margin:14px 0 4px">2. IR 주가변동 3대 핵심 요인 분석</h4>
-<ul style="margin:0">${ana.map(([k, x]) => `<li><b>${esc(k)}</b>: ${esc(x)}</li>`).join('')}</ul>
-<h4 style="margin:14px 0 4px">3. 주요 뉴스 (지씨셀·NBI)</h4>
-<ol style="margin:0">${newsHtml}</ol>
-<h4 style="margin:14px 0 4px">4. 업종 지수 및 매크로 지표</h4>
-<ul style="margin:0">${rows.map(([k, x, r]) => `<li>${esc(k)}: ${esc(x)} (${esc(r)})</li>`).join('')}</ul>
-<div style="margin-top:14px;color:#888;font-size:12px">지씨셀 IR 일일보고 대시보드에서 생성되었습니다.</div>
+`<div style="font-family:'Malgun Gothic',Arial,sans-serif;font-size:14px;line-height:1.7;color:#111">
+<div><b>${esc(head)}</b></div>
+<div style="margin-top:14px"><b>- 주요 변동요인</b></div>
+<div style="margin-left:14px">${ana.map(([k, x]) => `<div>${esc(k)}: ${esc(x)}</div>`).join('')}</div>
+<div style="margin-top:14px"><b>- 주요 뉴스</b></div>
+<div style="margin-left:14px">${newsHtml}</div>
 </div>`;
             return { text, html };
         }
