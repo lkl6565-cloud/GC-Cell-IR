@@ -116,7 +116,7 @@ def build_payload():
     data = {
         "updatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
         "tradingDate": market["tradingDate"],
-        "screenTitle": f"IR 주가변동 3대 요인 [{now.strftime('%Y-%m-%d')}]",
+        "screenTitle": f"지씨셀 IR 일일보고 [{now.strftime('%Y-%m-%d')}]",
         "stock": market["stock"],
         "companyNews": company_news,
         "nbiNews": nbi_news,
