@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+python-dotenv
+yfinance
+# 선택: AI 요약(GEMINI_API_KEY 설정 시에만 사용)
+google-genai
