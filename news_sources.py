@@ -109,6 +109,17 @@ def company_news(limit=3):
     return google_news("지씨셀 OR 아티바", limit)
 
 
+def market_news(limit=3):
+    """종가 기준 시황 뉴스: '코스피 마감' / '코스닥 마감' 기사. 네이버 실패 시 구글 뉴스로 대체."""
+    try:
+        items = naver_news(["코스피 마감", "코스닥 마감"], limit)
+        if items:
+            return items
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] 네이버 시황 뉴스 실패 -> 구글 뉴스로 대체: {e}")
+    return google_news("코스피 코스닥 마감 시황", limit, 2)
+
+
 # ---------- Yahoo Finance (yfinance) ----------
 NBI_YAHOO_SYMBOLS = "^NBI,IBB,IBBQ,AMGN,GILD,VRTX,REGN"  # 앞 3개: 지수·ETF, 나머지: 대형 구성종목
 

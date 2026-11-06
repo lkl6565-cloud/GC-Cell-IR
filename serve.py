@@ -110,6 +110,8 @@ def build_payload():
     company_news = _safe(ns.company_news, [], "지씨셀 뉴스", warnings)
     nbi_news = _safe(lambda: ns.nbi_news(3, exclude=company_news), [], "NBI 뉴스", warnings)
 
+    market_news = _safe(ns.market_news, [], "시황 뉴스", warnings)
+
     data = {
         "updatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
         "tradingDate": market["tradingDate"],
@@ -117,6 +119,7 @@ def build_payload():
         "stock": market["stock"],
         "companyNews": company_news,
         "nbiNews": nbi_news,
+        "marketNews": market_news,
         "macroIndices": market["macroIndices"],
     }
     ai = _safe(lambda: md.ai_analysis(data), None, "AI 요약", warnings)

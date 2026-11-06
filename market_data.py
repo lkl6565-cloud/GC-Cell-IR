@@ -361,20 +361,49 @@ def ai_analysis(data):
         return None
     from google import genai
 
-    s = data["stock"]
+    s, m = data["stock"], data["macroIndices"]
+
+    def idx(k):  # 지수는 값·등락률만 전달
+        v = m.get(k) or {}
+        return {"지수": v.get("value"), "등락률": v.get("ratio")} if v else "데이터 없음"
+
+    # 항목별로 근거 데이터를 분리해서 넘긴다 (다른 항목 데이터가 섞여 들어가지 않도록)
     facts = {
-        "지씨셀": {k: s.get(k) for k in ("price", "ratio", "volume", "marketStatus")},
-        "수급(억원, 당일/최근5일)": s.get("investor"),
-        "지수": data["macroIndices"],
-        "지씨셀 기사 제목": [n["title"] for n in data["companyNews"]],
-        "NBI 기사 제목": [n["title"] for n in data["nbiNews"]],
+        "1_회사": {
+            "종가 기준 시세": {k: s.get(k) for k in ("price", "ratio", "volume", "marketStatus")},
+            "주체별 수급(억원, 순매수, 당일/최근5일)": s.get("investor") or "데이터 없음",
+            "지씨셀 기사(제목·날짜·매체)": [
+                {k: n.get(k) for k in ("date", "title", "publisher")} for n in data["companyNews"]
+            ] or "관련 기사 없음",
+        },
+        "2_업계": {
+            "코스닥 제약(KQ26)": idx("kq26"),
+            "나스닥 바이오(NBI)": idx("nbi"),
+            "NBI 관련 기사 제목": [n["title"] for n in data["nbiNews"]] or "관련 기사 없음",
+        },
+        "3_매크로": {
+            "코스피": idx("kospi"),
+            "코스닥": idx("kosdaq"),
+            "종가 시황 기사(제목·날짜·매체)": [
+                {k: n.get(k) for k in ("date", "title", "publisher")} for n in (data.get("marketNews") or [])
+            ] or "시황 기사 없음",
+        },
     }
     prompt = (
-        "당신은 지씨셀(144510) IR 담당자입니다. 아래 JSON 데이터만 근거로 한국어 요약을 작성하세요.\n"
-        "규칙: 제공된 숫자와 기사 제목에 있는 내용만 쓰고, 추측·전망·투자 권유·임상/실적 등 제공되지 않은 사실은 쓰지 마세요. "
-        "데이터가 없으면 '데이터 없음'이라고 쓰세요. 각 항목은 1~2문장입니다.\n"
-        '반드시 JSON 한 개로만 답하세요: {"internal": "기업 측면(주가·거래량·수급·기사)", '
-        '"supply": "업계 측면(코스닥 제약 KQ26·나스닥 바이오 NBI)", "macro": "매크로 측면(코스피·코스닥·원/달러)"}\n\n'
+        "당신은 코스닥 상장사 지씨셀(144510)의 IR 담당자입니다. 경영진·주주에게 매일 공유하는 IR 데일리 브리핑의 "
+        "'주가변동 3대 요인'을 간결한 한국어 경어체(~입니다, ~했습니다)로 작성하세요.\n"
+        "작성 기준\n"
+        "1) internal(회사): 종가 기준 주가·등락률과 주체별(외국인·기관·개인) 순매수를 먼저 쓰고, 이어서 수급의 배경으로 볼 수 있는 "
+        "지씨셀 기사의 핵심 내용을 연결해 설명합니다. 기사 제목에 근거가 있는 내용만 쓰고, 기사가 수급과 직접 관련이 있는지 "
+        "제목만으로 알 수 없으면 '원인이다'라고 단정하지 말고 '관련 보도로는 ~가 있었습니다'로 씁니다.\n"
+        "2) supply(업계): 코스닥 제약(KQ26)과 나스닥 바이오(NBI)의 등락률을 함께 짚어 업계 흐름을 요약하고, "
+        "NBI 기사 제목에 근거가 있으면 그 내용을 배경으로 덧붙입니다. 두 지수의 방향이 다르면 그 점을 그대로 씁니다.\n"
+        "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 종가 시황 기사 제목에 나온 내용만으로 "
+        "마감 시황의 핵심을 한 줄 덧붙입니다. 다른 지표는 쓰지 않습니다.\n"
+        "공통 규칙: 각 항목은 1~2문장, 150자 이내. 제공된 숫자와 기사 제목에 있는 내용만 사용하고, 원인 추정·주가 전망·투자의견·"
+        "목표가·임상/실적 등 제공되지 않은 사실은 쓰지 않습니다. 근거 데이터가 없으면 '관련 데이터 없음'이라고만 씁니다. "
+        "숫자는 제공된 값 그대로(등락률은 부호 포함) 쓰고, 과장된 표현·이모지는 쓰지 않습니다.\n"
+        '반드시 JSON 한 개로만 답하세요: {"internal": "...", "supply": "...", "macro": "..."}\n\n'
         + json.dumps(facts, ensure_ascii=False)
     )
     try:
@@ -406,7 +435,8 @@ def analysis_block(data):
     return {
         "internal": internal,
         "supply": f"코스닥 제약(KQ26) {g('kq26')}, 나스닥 바이오(NBI) {g('nbi')}.",
-        "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}, 원/달러 {g('usdKrw', 'change')}.",
+        "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}."
+        + (f" 시황: {data['marketNews'][0]['title']}" if data.get("marketNews") else ""),
     }
 
 
