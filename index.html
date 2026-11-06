@@ -252,8 +252,8 @@
                                 <th class="py-2 pr-3 font-normal">종목</th>
                                 <th class="py-2 px-2 text-right font-normal">종가</th>
                                 <th class="py-2 px-2 text-right font-normal">등락률</th>
-                                <th class="py-2 px-2 text-right font-normal">거래량</th>
-                                <th class="py-2 pl-2 text-right font-normal">수급(억) 외국인 / 기관 / 개인</th>
+                                <th class="hidden md:table-cell py-2 px-2 text-right font-normal">거래량</th>
+                                <th class="hidden md:table-cell py-2 pl-2 text-right font-normal">수급(억) 외국인 / 기관 / 개인</th>
                             </tr>
                         </thead>
                         <tbody id="peer-tbody" class="divide-y divide-zinc-800/40">
@@ -382,8 +382,8 @@
                 tr.appendChild(n);
                 tr.appendChild(cell(r.price, 'py-2.5 px-2 text-right font-bold ' + toneClass(r.ratio)));
                 tr.appendChild(cell(r.ratio, 'py-2.5 px-2 text-right font-bold ' + toneClass(r.ratio)));
-                tr.appendChild(cell(r.volume ? String(r.volume).replace('주', '') : '', 'py-2.5 px-2 text-right text-zinc-300'));
-                const sup = document.createElement('td'); sup.className = 'py-2.5 pl-2 text-right';
+                tr.appendChild(cell(r.volume ? String(r.volume).replace('주', '') : '', 'hidden md:table-cell py-2.5 px-2 text-right text-zinc-300'));
+                const sup = document.createElement('td'); sup.className = 'hidden md:table-cell py-2.5 pl-2 text-right';
                 const inv = r.investor;
                 if (inv) {
                     [['외', inv.foreign], ['기', inv.organ], ['개', inv.personal]].forEach(([k, val], i) => {
