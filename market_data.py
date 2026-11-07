@@ -285,6 +285,76 @@ def usd_krw():
     last, prev = yf_pair("KRW=X")
     return {"value": f"{last:,.2f}", "change": pct_str((last - prev) / prev * 100)}
 
+
+def xbi_index():
+    """SPDR S&P Biotech ETF(XBI): 중소형 바이오 흐름 (미국 전일 장 기준)."""
+    last, prev = yf_pair("XBI")
+    return {"value": f"{last:,.2f}", "ratio": pct_str((last - prev) / prev * 100)}
+
+
+def us10y():
+    """미국 10년물 국채금리(%). 변동은 %p. (^TNX 가 10배 값으로 오면 보정)"""
+    last, prev = yf_pair("^TNX")
+    if last > 20:
+        last, prev = last / 10, prev / 10
+    return {"value": f"{last:.3f}%", "change": f"{last - prev:+.3f}%p"}
+
+
+# ---------- DART 공시 (선택: .env 에 DART_API_KEY 가 있을 때만) ----------
+_DART = {"corp": None}
+
+
+def _dart_corp_code(key):
+    if os.environ.get("DART_CORP_CODE"):
+        return os.environ["DART_CORP_CODE"].strip()
+    if _DART["corp"]:
+        return _DART["corp"]
+    import io
+    import zipfile
+
+    r = requests.get("https://opendart.fss.or.kr/api/corpCode.xml", params={"crtfc_key": key}, timeout=20)
+    r.raise_for_status()
+    xml = zipfile.ZipFile(io.BytesIO(r.content)).read("CORPCODE.xml").decode("utf-8", "ignore")
+    for m in re.finditer(r"<list>(.*?)</list>", xml, re.S):
+        blk = m.group(1)
+        sc = re.search(r"<stock_code>\s*(\d+)\s*</stock_code>", blk)
+        if sc and sc.group(1) == CODE:
+            cc = re.search(r"<corp_code>\s*(\d+)\s*</corp_code>", blk)
+            if cc:
+                _DART["corp"] = cc.group(1)
+                return _DART["corp"]
+    raise RuntimeError("DART 고유번호 조회 실패")
+
+
+def dart_disclosures(now, days=7, limit=5):
+    """최근 공시 제목. 키가 없으면 None(미연동), 공시가 없으면 [] ."""
+    key = (os.environ.get("DART_API_KEY") or "").strip()
+    if not key:
+        return None
+    end = now.strftime("%Y%m%d")
+    bgn = (now - timedelta(days=days)).strftime("%Y%m%d")
+    r = requests.get(
+        "https://opendart.fss.or.kr/api/list.json",
+        params={"crtfc_key": key, "corp_code": _dart_corp_code(key), "bgn_de": bgn, "end_de": end,
+                "page_count": 20},
+        timeout=15,
+    )
+    r.raise_for_status()
+    j = r.json()
+    if j.get("status") == "013":  # 조회된 데이터 없음
+        return []
+    if j.get("status") != "000":
+        raise RuntimeError(f"DART 응답 오류 {j.get('status')}")
+    out = []
+    for it in j.get("list", [])[:limit]:
+        d = str(it.get("rcept_dt", ""))
+        out.append({
+            "date": f"{d[4:6]}/{d[6:8]}" if len(d) == 8 else d,
+            "title": str(it.get("report_nm", "")).strip(),
+            "link": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={it.get('rcept_no', '')}",
+        })
+    return out
+
 INVESTING_HOSTS = ("www.investing.com", "uk.investing.com")
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/126.0.0.0 Safari/537.36")
@@ -388,12 +458,17 @@ def ai_analysis(data):
     peers = [{"종목": r.get("name"), "등락률": r.get("ratio")}
              for r in (data.get("peerTable") or []) if r.get("ratio") not in (None, "-")]
     fx = m.get("usdKrw") or {}
+    ty = m.get("us10y") or {}
+    disc = s.get("disclosures")
 
     # 항목별로 근거 데이터를 분리해서 넘긴다 (다른 항목 데이터가 섞여 들어가지 않도록)
     facts = {
         "1_회사": {
             "종가 기준 시세": {k: s.get(k) for k in ("price", "ratio", "volume", "marketStatus")},
             "주체별 수급(억원, 순매수, 당일/최근5일)": s.get("investor") or "데이터 없음",
+            "최근 7일 공시(DART)": ("최근 7일 공시 없음" if disc == [] else
+                                  [{"date": x["date"], "title": x["title"]} for x in disc]) if disc is not None
+                                 else "데이터 없음",
             "지수 대비 상대강도(지씨셀 등락률 - 지수 등락률)": rel or "데이터 없음",
             "녹십자 계열 종목 등락률": peers or "데이터 없음",
             "지씨셀 기사(제목·날짜·매체)": [
@@ -403,12 +478,14 @@ def ai_analysis(data):
         "2_업계": {
             "코스닥 제약(KQ26)": idx("kq26"),
             "나스닥 바이오(NBI, 미국 전일 장 기준)": idx("nbi"),
+            "미국 XBI(중소형 바이오 ETF, 미국 전일 장 기준)": idx("xbi"),
             "NBI 관련 기사 제목": [n["title"] for n in data["nbiNews"]] or "관련 기사 없음",
         },
         "3_매크로": {
             "코스피": idx("kospi"),
             "코스닥": idx("kosdaq"),
             "원/달러 환율": {"환율": fx.get("value"), "전일 대비": fx.get("change")} if fx else "데이터 없음",
+            "미국 10년물 국채금리(미국 전일 장 기준)": {"금리": ty.get("value"), "전일 대비": ty.get("change")} if ty else "데이터 없음",
             "종가 시황 기사(제목·날짜·매체)": [
                 {k: n.get(k) for k in ("date", "title", "publisher")} for n in (data.get("marketNews") or [])
             ] or "시황 기사 없음",
@@ -427,12 +504,13 @@ def ai_analysis(data):
         "그 외에는 '전 거래일 종가'로 씁니다. 수급은 값이 양수면 '순매수 N억원', 음수면 '순매도 N억원'(부호 없이 절댓값)으로 씁니다. "
         "기사 제목에 근거가 있는 내용만 쓰고, 기사가 수급과 직접 관련이 있는지 제목만으로 알 수 없으면 '원인이다'라고 단정하지 말고 "
         "'관련 보도로는 ~가 있었음'으로 씁니다. 지수 대비 상대강도가 제공되면 코스닥 대비 강/약을 한 구절로 덧붙이고, "
-        "녹십자 계열 종목 등락률이 제공되면 계열 전반이 같은 방향인지 다른 방향인지만 사실대로 덧붙입니다.\n"
-        "2) supply(업계): 코스닥 제약(KQ26)과 나스닥 바이오(NBI)의 등락률을 함께 짚어 업계 흐름을 요약하고, "
+        "녹십자 계열 종목 등락률이 제공되면 계열 전반이 같은 방향인지 다른 방향인지만 사실대로 덧붙입니다. "
+        "최근 7일 공시가 제공되면 제목 그대로 '공시로는 ~가 있었음'으로 한 번만 언급하고, 공시 내용·영향은 추정하지 않습니다.\n"
+        "2) supply(업계): 코스닥 제약(KQ26)과 나스닥 바이오(NBI)·XBI의 등락률을 함께 짚어 업계 흐름을 요약하고, "
         "NBI 기사 제목에 근거가 있으면 그 내용을 배경으로 덧붙입니다. 두 지수의 방향이 다르면 그 점을 그대로 씁니다. "
         "NBI는 미국 전일 장 기준이므로 '미국 전일 장 기준 NBI'처럼 시차를 밝힙니다.\n"
-        "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 원/달러 환율(값·전일 대비)을 덧붙인 뒤, "
-        "종가 시황 기사 제목에 나온 내용만으로 마감 시황의 핵심을 한 줄 덧붙입니다. 금리 등 제공되지 않은 지표는 쓰지 않습니다.\n"
+        "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 원/달러 환율(값·전일 대비)과 미국 10년물 금리(값·전일 대비, 미국 전일 장 기준)를 덧붙인 뒤, "
+        "종가 시황 기사 제목에 나온 내용만으로 마감 시황의 핵심을 한 줄 덧붙입니다. 제공되지 않은 지표는 쓰지 않습니다.\n"
         "공통 규칙: 각 항목은 1~2문장, 150자 이내. 제공된 숫자와 기사 제목에 있는 내용만 사용하고, 원인 추정·주가 전망·투자의견·"
         "목표가·임상/실적 등 제공되지 않은 사실은 쓰지 않습니다. 근거 데이터가 없으면 '관련 데이터 없음'이라고만 씁니다. "
         "숫자는 제공된 값 그대로(등락률은 부호 포함) 쓰고, 과장된 표현·이모지는 쓰지 않습니다.\n"
@@ -547,9 +625,12 @@ def collect_market(kw, now):
     inv = safe(lambda: investor_block(rows), None, "수급 집계") if rows else None
     if inv:
         st["investor"] = inv
+    st["disclosures"] = safe(lambda: dart_disclosures(now), None, "DART 공시")
 
     macro = {
         "nbi": safe(nbi_index, None, "NBI"),
+        "xbi": safe(xbi_index, None, "XBI"),
+        "us10y": safe(us10y, None, "미국 10년물"),
         "kq26": safe(lambda: kq26_quote(kw), None, "코스닥 제약(KQ26)"),
         "kospi": safe(lambda: sector_index(kw, "0", "001"), None, "코스피") if kw is not None else None,
         "kosdaq": safe(lambda: sector_index(kw, "1", "101"), None, "코스닥") if kw is not None else None,
