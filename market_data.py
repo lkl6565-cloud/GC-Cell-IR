@@ -356,6 +356,7 @@ def investing_quote(slug):
 
 _AI_CACHE = {"prompt": None, "out": None, "fail_until": 0.0}
 AI_COOLDOWN = 600  # 429 이후 10분간 AI 호출 중지
+AI_LIVE_INTERVAL = 300  # 장중 AI 재호출 최소 간격(초)
 
 
 def ai_analysis(data):
@@ -371,30 +372,50 @@ def ai_analysis(data):
         v = m.get(k) or {}
         return {"지수": v.get("value"), "등락률": v.get("ratio")} if v else "데이터 없음"
 
+    def pct(x):
+        try:
+            return num(str(x).replace("%", "").replace("−", "-"))
+        except Exception:  # noqa: BLE001
+            return None
+
+    # 상대강도: 지씨셀 등락률 - 지수 등락률 (이미 수집한 숫자로 계산, 해석은 AI 가 하지 않도록 값만 전달)
+    rel = {}
+    me = pct(s.get("ratio"))
+    for label, k in (("코스닥 대비", "kosdaq"), ("코스닥 제약(KQ26) 대비", "kq26")):
+        o = pct((m.get(k) or {}).get("ratio"))
+        if me is not None and o is not None:
+            rel[label] = f"{me - o:+.2f}%p"
+    peers = [{"종목": r.get("name"), "등락률": r.get("ratio")}
+             for r in (data.get("peerTable") or []) if r.get("ratio") not in (None, "-")]
+    fx = m.get("usdKrw") or {}
+
     # 항목별로 근거 데이터를 분리해서 넘긴다 (다른 항목 데이터가 섞여 들어가지 않도록)
     facts = {
         "1_회사": {
             "종가 기준 시세": {k: s.get(k) for k in ("price", "ratio", "volume", "marketStatus")},
             "주체별 수급(억원, 순매수, 당일/최근5일)": s.get("investor") or "데이터 없음",
+            "지수 대비 상대강도(지씨셀 등락률 - 지수 등락률)": rel or "데이터 없음",
+            "녹십자 계열 종목 등락률": peers or "데이터 없음",
             "지씨셀 기사(제목·날짜·매체)": [
                 {k: n.get(k) for k in ("date", "title", "publisher")} for n in data["companyNews"]
             ] or "관련 기사 없음",
         },
         "2_업계": {
             "코스닥 제약(KQ26)": idx("kq26"),
-            "나스닥 바이오(NBI)": idx("nbi"),
+            "나스닥 바이오(NBI, 미국 전일 장 기준)": idx("nbi"),
             "NBI 관련 기사 제목": [n["title"] for n in data["nbiNews"]] or "관련 기사 없음",
         },
         "3_매크로": {
             "코스피": idx("kospi"),
             "코스닥": idx("kosdaq"),
+            "원/달러 환율": {"환율": fx.get("value"), "전일 대비": fx.get("change")} if fx else "데이터 없음",
             "종가 시황 기사(제목·날짜·매체)": [
                 {k: n.get(k) for k in ("date", "title", "publisher")} for n in (data.get("marketNews") or [])
             ] or "시황 기사 없음",
         },
     }
     prompt = (
-        "당신은 코스닥 상장사 지씨셀(144510)의 IR 담당자입니다. 경영진·주주에게 매일 공유하는 IR 데일리 브리핑의 "
+        "당신은 코스닥 상장사 지씨셀(144510)의 IR 담당자입니다. 경영진·주주에게 매일 공유하는 지씨셀 IR 일일보고의 "
         "'주가변동 3대 요인'을 간결한 개조식 문체로 작성하세요. 문장은 '~함', '~했음', '~임', '~있었음'처럼 명사형으로 끝맺고 "
         "'~습니다' 체는 쓰지 않습니다.\n"
         "문체 예시(숫자·내용은 절대 가져다 쓰지 말고 문체만 참고): "
@@ -405,11 +426,13 @@ def ai_analysis(data):
         "지씨셀 기사의 핵심 내용을 연결해 설명합니다. 회사는 '당사'로 칭하고, 시세의 marketStatus에 '금일 종가'가 있으면 '금일 종가', "
         "그 외에는 '전 거래일 종가'로 씁니다. 수급은 값이 양수면 '순매수 N억원', 음수면 '순매도 N억원'(부호 없이 절댓값)으로 씁니다. "
         "기사 제목에 근거가 있는 내용만 쓰고, 기사가 수급과 직접 관련이 있는지 제목만으로 알 수 없으면 '원인이다'라고 단정하지 말고 "
-        "'관련 보도로는 ~가 있었음'으로 씁니다.\n"
+        "'관련 보도로는 ~가 있었음'으로 씁니다. 지수 대비 상대강도가 제공되면 코스닥 대비 강/약을 한 구절로 덧붙이고, "
+        "녹십자 계열 종목 등락률이 제공되면 계열 전반이 같은 방향인지 다른 방향인지만 사실대로 덧붙입니다.\n"
         "2) supply(업계): 코스닥 제약(KQ26)과 나스닥 바이오(NBI)의 등락률을 함께 짚어 업계 흐름을 요약하고, "
-        "NBI 기사 제목에 근거가 있으면 그 내용을 배경으로 덧붙입니다. 두 지수의 방향이 다르면 그 점을 그대로 씁니다.\n"
-        "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 종가 시황 기사 제목에 나온 내용만으로 "
-        "마감 시황의 핵심을 한 줄 덧붙입니다. 다른 지표는 쓰지 않습니다.\n"
+        "NBI 기사 제목에 근거가 있으면 그 내용을 배경으로 덧붙입니다. 두 지수의 방향이 다르면 그 점을 그대로 씁니다. "
+        "NBI는 미국 전일 장 기준이므로 '미국 전일 장 기준 NBI'처럼 시차를 밝힙니다.\n"
+        "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 원/달러 환율(값·전일 대비)을 덧붙인 뒤, "
+        "종가 시황 기사 제목에 나온 내용만으로 마감 시황의 핵심을 한 줄 덧붙입니다. 금리 등 제공되지 않은 지표는 쓰지 않습니다.\n"
         "공통 규칙: 각 항목은 1~2문장, 150자 이내. 제공된 숫자와 기사 제목에 있는 내용만 사용하고, 원인 추정·주가 전망·투자의견·"
         "목표가·임상/실적 등 제공되지 않은 사실은 쓰지 않습니다. 근거 데이터가 없으면 '관련 데이터 없음'이라고만 씁니다. "
         "숫자는 제공된 값 그대로(등락률은 부호 포함) 쓰고, 과장된 표현·이모지는 쓰지 않습니다.\n"
@@ -418,6 +441,12 @@ def ai_analysis(data):
     )
     # 같은 데이터면 직전 AI 요약을 그대로 쓴다 (새로고침마다 Gemini 를 부르지 않도록)
     if _AI_CACHE["prompt"] == prompt and _AI_CACHE["out"]:
+        return dict(_AI_CACHE["out"])
+    # 장중에는 시세가 계속 바뀌어 위 캐시가 안 맞으므로, 5분 이내 재호출은 직전 요약을 재사용한다
+    nowk = datetime.now(KST)
+    hm = nowk.hour * 60 + nowk.minute
+    if (MARKET_OPEN <= hm < MARKET_CLOSE and _AI_CACHE["out"]
+            and time.time() - _AI_CACHE.get("ts", 0.0) < AI_LIVE_INTERVAL):
         return dict(_AI_CACHE["out"])
     # 한도 초과(429) 직후에는 잠시 호출을 멈춘다
     if time.time() < _AI_CACHE["fail_until"]:
@@ -437,7 +466,7 @@ def ai_analysis(data):
     out = {k: str(d.get(k, "")).strip() for k in ("internal", "supply", "macro")}
     if not all(out.values()):
         raise RuntimeError("AI 응답 형식 오류")
-    _AI_CACHE["prompt"], _AI_CACHE["out"] = prompt, dict(out)
+    _AI_CACHE["prompt"], _AI_CACHE["out"], _AI_CACHE["ts"] = prompt, dict(out), time.time()
     return out
 
 
@@ -449,16 +478,20 @@ def analysis_block(data):
     def g(k, f="ratio"):
         return (m.get(k) or {}).get(f, "-")
 
-    internal = f"지씨셀 {st['price']} ({st['ratio']}), 거래량 {st['volume']}."
+    ms = st.get("marketStatus") or ""
+    label = "현재가" if "장중" in ms else ("금일 종가" if "금일" in ms else "전 거래일 종가")
+    internal = f"당사 {label} {st['price']}({st['ratio']}), 거래량 {st['volume']}주를 기록함."
     if inv:
-        internal += f" 최근 거래일 순매수: 외국인 {inv['foreign']}, 기관 {inv['organ']}, 개인 {inv['personal']}."
+        internal += f" 최근 거래일 순매수는 외국인 {inv['foreign']}, 기관 {inv['organ']}, 개인 {inv['personal']}임."
     first = (data.get("companyNews") or [{}])[0].get("title")
-    internal += f" 최신 기사: {first}" if first else " 최근 관련 기사 없음."
+    internal += f" 관련 보도로는 '{first}'가 있었음." if first else " 최근 관련 기사 없음."
+    fx = m.get("usdKrw") or {}
     return {
         "internal": internal,
-        "supply": f"코스닥 제약(KQ26) {g('kq26')}, 나스닥 바이오(NBI) {g('nbi')}.",
-        "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}."
-        + (f" 시황: {data['marketNews'][0]['title']}" if data.get("marketNews") else ""),
+        "supply": f"코스닥 제약(KQ26) {g('kq26')}, 미국 전일 장 기준 나스닥 바이오(NBI) {g('nbi')}였음.",
+        "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}였음."
+        + (f" 원/달러 {fx.get('value')}원(전일 대비 {fx.get('change')})." if fx.get("value") else "")
+        + (f" 시황 보도로는 '{data['marketNews'][0]['title']}'가 있었음." if data.get("marketNews") else ""),
     }
 
 
