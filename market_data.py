@@ -530,14 +530,17 @@ def ai_analysis(data):
     if time.time() < _AI_CACHE["fail_until"]:
         raise RuntimeError("AI 요약 한도 초과로 잠시 중지 중 (자동 문구 사용)")
     try:
-        client = genai.Client(api_key=key, http_options={"timeout": 30000})
+        client = genai.Client(api_key=key, http_options={"timeout": 60000})
     except Exception:  # noqa: BLE001
         client = genai.Client(api_key=key)
     try:
         resp = client.models.generate_content(model=os.environ.get("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
     except Exception as e:  # noqa: BLE001
-        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+        msg = str(e)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
             _AI_CACHE["fail_until"] = time.time() + AI_COOLDOWN
+        elif any(k in msg for k in ("504", "DEADLINE", "503", "UNAVAILABLE", "timed out", "Timeout")):
+            _AI_CACHE["fail_until"] = time.time() + 120  # 시간 초과·일시 장애: 2분간 재호출 중지 (새로고침마다 대기 방지)
         raise
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
     d = json.loads(text)
@@ -558,7 +561,7 @@ def analysis_block(data):
 
     ms = st.get("marketStatus") or ""
     label = "현재가" if "장중" in ms else ("금일 종가" if "금일" in ms else "전 거래일 종가")
-    internal = f"당사 {label} {st['price']}({st['ratio']}), 거래량 {st['volume']}주를 기록함."
+    internal = f"당사 {label} {st['price']}({st['ratio']}), 거래량 {st['volume']}를 기록함."
     if inv:
         internal += f" 최근 거래일 순매수는 외국인 {inv['foreign']}, 기관 {inv['organ']}, 개인 {inv['personal']}임."
     first = (data.get("companyNews") or [{}])[0].get("title")
