@@ -68,7 +68,17 @@ def google_news(query, limit=3, days=2):
 
 
 # ---------- 네이버 API HUB (지씨셀 뉴스) ----------
-def naver_news(queries, limit=3):
+COMPANY_QUERIES = ["지씨셀", "GC셀", "아티바", "Artiva", "gccell", "144510"]
+_COMPANY_KEYS = ("지씨셀", "gc셀", "gccell", "gc cell", "아티바", "artiva", "144510")
+
+
+def _is_company(title):
+    """제목에 지씨셀 관련 키워드가 있는지 (대소문자 무시). 여러 회사를 묶은 '외' 기사 등을 걸러낸다."""
+    t = (title or "").lower()
+    return any(k in t for k in _COMPANY_KEYS)
+
+
+def naver_news(queries, limit=3, keep=None):
     kid = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID")
     key = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NAVER_CLIENT_SECRET")
     if not kid or not key:
@@ -88,6 +98,8 @@ def naver_news(queries, limit=3):
             link = it.get("link") or it.get("originallink") or ""
             if not title or title in seen or not _http_ok(link):
                 continue
+            if keep and not keep(title):
+                continue
             seen.add(title)
             try:  # 네이버 pubDate 는 'Thu, 05 Nov 2026 14:00:00 +0900' 형식
                 dt = parsedate_to_datetime(it["pubDate"]).astimezone(KST)
@@ -99,14 +111,19 @@ def naver_news(queries, limit=3):
 
 
 def company_news(limit=3):
-    """지씨셀 뉴스: '지씨셀' 또는 '아티바' 키워드. 네이버 실패 시 구글."""
+    """지씨셀 뉴스: 지씨셀·GC셀·아티바·Artiva·gccell·144510 키워드, 제목에 키워드가 있는 기사만.
+    네이버 실패 시 구글. 키워드가 제목에 든 기사가 하나도 없으면 필터 없이 검색 결과를 그대로 쓴다."""
     try:
-        items = naver_news(["지씨셀", "아티바"], limit)
+        items = naver_news(COMPANY_QUERIES, limit, keep=_is_company)
+        if items:
+            return items
+        items = naver_news(COMPANY_QUERIES[:3], limit)
         if items:
             return items
     except Exception as e:  # noqa: BLE001
         print(f"[경고] 네이버 뉴스 실패 -> 구글 뉴스로 대체: {e}")
-    return google_news("지씨셀 OR 아티바", limit)
+    g = google_news(" OR ".join(COMPANY_QUERIES), limit * 4)
+    return [x for x in g if _is_company(x.get("title"))][:limit] or g[:limit]
 
 
 def market_news(limit=3):
