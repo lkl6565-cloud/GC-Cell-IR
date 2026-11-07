@@ -152,6 +152,11 @@
                                     <td id="nbi-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
                                 </tr>
                                 <tr>
+                                    <td class="py-2.5 px-2.5 font-sans font-medium text-white">미국 바이오 ETF (XBI)</td>
+                                    <td id="xbi-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
+                                    <td id="xbi-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
+                                </tr>
+                                <tr>
                                     <td class="py-2.5 px-2.5 font-sans font-medium text-white">코스닥 제약 (KQ26)</td>
                                     <td id="kq26-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
                                     <td id="kq26-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
@@ -234,6 +239,11 @@
                                 <td class="py-2.5 font-sans font-medium text-white">원/달러</td>
                                 <td id="macro-fx-val" class="py-2.5 text-right text-white font-bold">-</td>
                                 <td id="macro-fx-ratio" class="py-2.5 text-right text-zinc-400 font-bold">-</td>
+                            </tr>
+                            <tr>
+                                <td class="py-2.5 font-sans font-medium text-white">미국 10년물</td>
+                                <td id="macro-us10y-val" class="py-2.5 text-right text-white font-bold">-</td>
+                                <td id="macro-us10y-ratio" class="py-2.5 text-right text-zinc-400 font-bold">-</td>
                             </tr>
                         </tbody>
                     </table>
@@ -563,9 +573,11 @@
             const idxBase = 'py-2.5 px-2.5 text-right font-bold';
             const macBase = 'py-2.5 text-right font-bold';
             if (m.nbi) { setText('nbi-val', m.nbi.value); setTone('nbi-ratio', m.nbi.ratio, idxBase); }
+            if (m.xbi) { setText('xbi-val', m.xbi.value); setTone('xbi-ratio', m.xbi.ratio, idxBase); }
             if (m.kq26) { setText('kq26-val', m.kq26.value); setTone('kq26-ratio', m.kq26.ratio, idxBase); }
             if (m.kospi) { setText('macro-kospi-val', m.kospi.value); setTone('macro-kospi-ratio', m.kospi.ratio, macBase); }
             if (m.kosdaq) { setText('macro-kosdaq-val', m.kosdaq.value); setTone('macro-kosdaq-ratio', m.kosdaq.ratio, macBase); }
+            if (m.us10y) { setText('macro-us10y-val', m.us10y.value); setTone('macro-us10y-ratio', m.us10y.change || m.us10y.ratio, macBase); }
             if (m.usdKrw) { setText('macro-fx-val', m.usdKrw.value); setTone('macro-fx-ratio', m.usdKrw.change || m.usdKrw.ratio, macBase); }
 
             // 2. 분석 내용 및 analysis.is_ai 상태에 따른 배지 동적 렌더링
