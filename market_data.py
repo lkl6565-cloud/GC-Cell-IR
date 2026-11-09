@@ -142,10 +142,34 @@ def daily_bars(kw, ymd, code=CODE):
     return sorted(rows, key=lambda r: r["dt"], reverse=True)
 
 
-def _bar_quote(rows, i, status):
-    """i번째 일봉의 종가·전일대비·거래량 (전일대비는 바로 앞 영업일 종가 기준)."""
+def _bar_quote(rows, i, status, kw=None, code=CODE):
+    """i번째 일봉의 종가·전일대비·거래량 (전일대비는 바로 앞 영업일 종가 기준).
+    최신 일봉(i==0)은 일봉 간 값이 어긋날 수 있어, 시세 조회(ka10001)의 기준가(base_pric=전일 종가)가
+    있고 현재가가 일봉 종가와 같으면 그 기준가를 전일 종가로 쓴다 (HTS 등락률과 일치)."""
     close = abs(num(rows[i]["cur_prc"]))
     prev = abs(num(rows[i + 1]["cur_prc"])) if i + 1 < len(rows) else None
+    # 1순위: 같은 일봉 행의 전일대비(pred_pre) — HTS 일별 시세의 등락과 같은 기준
+    pp = num(rows[i].get("pred_pre"))
+    if pp is not None:
+        sig = str(rows[i].get("pred_pre_sig") or "")
+        mag = abs(pp)
+        neg = str(rows[i].get("pred_pre", "")).strip().startswith("-") or sig in ("4", "5")
+        base = close + mag if neg else close - mag
+        if base > 0:
+            return {
+                "price": f"{close:,.0f}원",
+                "ratio": pct_str((close - base) / base * 100),
+                "volume": f"{abs(num(rows[i].get('trde_qty')) or 0):,.0f}주",
+                "marketStatus": status,
+            }
+    if i == 0 and kw is not None:
+        try:
+            q = kw.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": code})
+            base, cur = num(q.get("base_pric")), num(q.get("cur_prc"))
+            if base and cur is not None and abs(abs(cur) - close) <= 0.5:
+                prev = abs(base)
+        except Exception as e:  # noqa: BLE001
+            print(f"[경고] 기준가 조회 실패, 일봉 전일 종가 사용: {e}")
     return {
         "price": f"{close:,.0f}원",
         "ratio": pct_str((close - prev) / prev * 100) if prev else "-",
@@ -175,10 +199,10 @@ def price_block(kw, now, code=CODE):
             st = stock_block(kw, code)
             st["marketStatus"] = "장중 (실시간)"
             return st
-        return _bar_quote(rows, 0, "전 거래일 종가 (휴장)")
+        return _bar_quote(rows, 0, "전 거래일 종가 (휴장)", kw, code)
     if today_bar:
-        return _bar_quote(rows, 0, "금일 종가 (정규장 마감)")
-    return _bar_quote(rows, 0, "전 거래일 종가 (휴장 또는 집계 지연)")
+        return _bar_quote(rows, 0, "금일 종가 (정규장 마감)", kw, code)
+    return _bar_quote(rows, 0, "전 거래일 종가 (휴장 또는 집계 지연)", kw, code)
 
 
 def investor_rows(kw, ymd, code=CODE):
