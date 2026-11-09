@@ -517,7 +517,8 @@ def ai_analysis(data):
         "공통 규칙: 각 항목은 1~2문장, 150자 이내. 제공된 숫자와 기사 제목에 있는 내용만 사용하고, 원인 추정·주가 전망·투자의견·"
         "목표가·임상/실적 등 제공되지 않은 사실은 쓰지 않습니다. 근거 데이터가 없으면 '관련 데이터 없음'이라고만 씁니다. "
         "숫자는 제공된 값 그대로(등락률은 부호 포함) 쓰고, 과장된 표현·이모지는 쓰지 않습니다.\n"
-        '반드시 JSON 한 개로만 답하세요: {"internal": "...", "supply": "...", "macro": "..."}\n\n'
+        '반드시 JSON 한 개로만 답하세요: {"internal": "...", "supply": "...", "macro": "..."} '
+        '(값 안의 큰따옴표는 반드시 \\" 로 이스케이프)\n\n'
         + json.dumps(facts, ensure_ascii=False)
     )
     # 같은 데이터면 직전 AI 요약을 그대로 쓴다 (새로고침마다 Gemini 를 부르지 않도록)
@@ -546,8 +547,18 @@ def ai_analysis(data):
             _AI_CACHE["fail_until"] = time.time() + 120  # 시간 초과·일시 장애: 2분간 재호출 중지 (새로고침마다 대기 방지)
         raise
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
-    d = json.loads(text)
-    out = {k: str(d.get(k, "")).strip() for k in ("internal", "supply", "macro")}
+    try:
+        cfgd = json.loads(text)
+    except Exception:  # noqa: BLE001
+        # 본문 안의 [관련 뉴스 "…"] 큰따옴표 때문에 JSON 이 깨진 경우: 키 경계로 직접 분리
+        cfgd = {}
+        mm = re.search(r'"internal"\s*:\s*"(.*?)"\s*,\s*"supply"\s*:\s*"(.*?)"\s*,\s*"macro"\s*:\s*"(.*)"\s*\}?\s*$', text, re.S)
+        if mm:
+            cfgd = {"internal": mm.group(1), "supply": mm.group(2), "macro": mm.group(3)}
+        else:
+            _AI_CACHE["fail_until"] = time.time() + 60  # 형식 오류 반복 시 새로고침마다 재호출 방지
+    d = cfgd
+    out = {k: str(d.get(k, "")).strip().replace('\\"', '"') for k in ("internal", "supply", "macro")}
     if not all(out.values()):
         raise RuntimeError("AI 응답 형식 오류")
     _AI_CACHE["prompt"], _AI_CACHE["out"], _AI_CACHE["ts"] = prompt, dict(out), time.time()
