@@ -341,7 +341,7 @@
             if (!el || text === undefined || text === null || text === '') return;
             const esc1 = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
             // 이스케이프 후 치환 (수치에는 <>& 가 없으므로 안전)
-            el.innerHTML = deltaFmt(esc1(text), (k, t) => k === 'up' ? `<span class="text-rose-500 font-semibold">${t}</span>` : (k === 'down' ? `<span class="text-sky-400 font-semibold">${t}</span>` : t));
+            el.innerHTML = deltaFmt(esc1(text), (k, t) => k === 'up' ? `<span style="color:#f43f5e;font-weight:600">${t}</span>` : (k === 'down' ? `<span style="color:#38bdf8;font-weight:600">${t}</span>` : t));
         }
 
         function toneClass(v) {
@@ -724,4 +724,4 @@ ${newsText}`;
         window.addEventListener('DOMContentLoaded', () => fetchLiveData(false));
     </script>
 </body>
-</html
+</html>
