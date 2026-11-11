@@ -326,6 +326,24 @@
             if (el && v !== undefined && v !== null && v !== '') el.textContent = String(v);
         }
 
+        // 요약 문구의 +/- 수치를 삼각형으로: 양수 ▲(빨강), 음수 ▼(파랑). 날짜(11-09)·기사 제목 속 하이픈은 건드리지 않음.
+        const DELTA_RE = /(?<![\w.,])([+\-\u2212])(\d[\d,]*(?:\.\d+)?)(%|억원|억|원|bp)?/g;
+        function deltaFmt(text, wrap) {
+            return String(text == null ? '' : text).replace(DELTA_RE, (m, sg, num, unit) => {
+                const val = parseFloat(num.replace(/,/g, ''));
+                if (!Number.isFinite(val) || val === 0) return wrap ? wrap('', num + (unit || '')) : num + (unit || '');
+                const up = sg === '+';
+                return wrap ? wrap(up ? 'up' : 'down', (up ? '▲' : '▼') + num + (unit || '')) : (up ? '▲' : '▼') + num + (unit || '');
+            });
+        }
+        function setDeltaHtml(id, text) {
+            const el = $(id);
+            if (!el || text === undefined || text === null || text === '') return;
+            const esc1 = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            // 이스케이프 후 치환 (수치에는 <>& 가 없으므로 안전)
+            el.innerHTML = deltaFmt(esc1(text), (k, t) => k === 'up' ? `<span class="text-rose-500 font-semibold">${t}</span>` : (k === 'down' ? `<span class="text-sky-400 font-semibold">${t}</span>` : t));
+        }
+
         function toneClass(v) {
             const s = String(v ?? '');
             if (s.startsWith('+') && !/^\+0(\.0+)?%?$/.test(s)) return 'text-rose-500';
@@ -582,9 +600,9 @@
 
             // 2. 분석 내용 및 analysis.is_ai 상태에 따른 배지 동적 렌더링
             const a = d.analysis || {};
-            if (a.internal) setText('analysis-internal', a.internal);
-            if (a.supply) setText('analysis-supply-external', a.supply);
-            if (a.macro) setText('analysis-macro-sector', a.macro);
+            if (a.internal) setDeltaHtml('analysis-internal', a.internal);
+            if (a.supply) setDeltaHtml('analysis-supply-external', a.supply);
+            if (a.macro) setDeltaHtml('analysis-macro-sector', a.macro);
 
             const badgeContainer = $('ai-status-badge');
             if (badgeContainer) {
@@ -659,7 +677,7 @@
 `${head}
 
 - 주요 변동요인
-${ana.map(([k, x]) => `   ${k}: ${x}`).join('\n')}
+${ana.map(([k, x]) => `   ${k}: ${deltaFmt(x)}`).join('\n')}
 
 - 주요 뉴스
 ${newsText}`;
@@ -668,7 +686,7 @@ ${newsText}`;
 `<div style="font-family:'Malgun Gothic',Arial,sans-serif;font-size:14px;line-height:1.7;color:#111">
 <div><b>${esc(head)}</b></div>
 <div style="margin-top:14px"><b>- 주요 변동요인</b></div>
-<div style="margin-left:14px">${ana.map(([k, x]) => `<div>${esc(k)}: ${esc(x)}</div>`).join('')}</div>
+<div style="margin-left:14px">${ana.map(([k, x]) => `<div>${esc(k)}: ${deltaFmt(esc(x), (kk, t) => kk === 'up' ? `<span style="color:#d63031">${t}</span>` : (kk === 'down' ? `<span style="color:#2563eb">${t}</span>` : t))}</div>`).join('')}</div>
 <div style="margin-top:14px"><b>- 주요 뉴스</b></div>
 <div style="margin-left:14px">${newsHtml}</div>
 </div>`;
@@ -706,4 +724,4 @@ ${newsText}`;
         window.addEventListener('DOMContentLoaded', () => fetchLiveData(false));
     </script>
 </body>
-</html>
+</html
