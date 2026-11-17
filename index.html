@@ -327,7 +327,7 @@
         }
 
         // 요약 문구의 +/- 수치를 삼각형으로: 양수 ▲(빨강), 음수 ▼(파랑). 날짜(11-09)·기사 제목 속 하이픈은 건드리지 않음.
-        const DELTA_RE = /(?<![\w.,])([+\-\u2212])(\d[\d,]*(?:\.\d+)?)(%|억원|억|원|bp)?/g;
+        const DELTA_RE = /(?<![\w.,])([+\-\u2212])(\d[\d,]*(?:\.\d+)?)(%p|%|억원|억|원|bp)?/g;
         function deltaFmt(text, wrap) {
             return String(text == null ? '' : text).replace(DELTA_RE, (m, sg, num, unit) => {
                 const val = parseFloat(num.replace(/,/g, ''));
@@ -643,26 +643,31 @@
             const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
             const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '');
 
-            // 뉴스: 지씨셀 + NBI 를 한 목록으로 합침 (각 최대 3건), 기사 1건 = 1줄
+            // 뉴스: 최근 공시(DART) + 지씨셀 뉴스(최대 3건) + 종가 시황 1건 + NBI 뉴스(최대 2건) -> 날짜 최신순, 1건 = 1줄
+            // 형식: [11/16] 제목 (언론사)   (공시는 언론사·링크 없이 제목만)
+            const mmdd = (x) => formatDateToMMDD(x);
             const news = [
-                ...(d.companyNews || []).slice(0, 3).map((n) => ({ ...n, tag: '지씨셀' })),
-                ...(d.nbiNews || []).slice(0, 3).map((n) => ({ ...n, tag: 'NBI' })),
-            ];
+                ...(s.disclosures || []).slice(0, 3).map((n) => ({ date: n.date, title: n.title, publisher: '', linkUrl: '' })),
+                ...(d.companyNews || []).slice(0, 3),
+                ...(d.marketNews || []).slice(0, 1),
+                ...(d.nbiNews || []).slice(0, 2),
+            ].sort((x, y) => mmdd(y.date).localeCompare(mmdd(x.date)));
+            const pubText = (n) => (n.publisher ? ` (${n.publisher})` : '');
             const newsText = news.length
-                ? news.map((n) => `   [${formatDateToMMDD(n.date)}] [${n.tag}] ${n.title} (${n.publisher || '뉴스'})${safeUrl(n.linkUrl) ? ' ▶ ' + n.linkUrl : ''}`).join('\n')
+                ? news.map((n) => `   [${mmdd(n.date)}] ${n.title}${pubText(n)}${safeUrl(n.linkUrl) ? ' ▶ ' + n.linkUrl : ''}`).join('\n')
                 : '   최근 뉴스 없음';
             const newsHtml = news.length
                 ? news.map((n) => {
                     const t = esc(n.title);
                     const link = safeUrl(n.linkUrl) ? `<a href="${esc(n.linkUrl)}">${t}</a>` : t;
-                    return `<div>[${esc(formatDateToMMDD(n.date))}] [${n.tag}] ${link} (${esc(n.publisher || '뉴스')})</div>`;
+                    return `<div>[${esc(mmdd(n.date))}] ${link}${esc(pubText(n))}</div>`;
                 }).join('')
                 : '<div>최근 뉴스 없음</div>';
 
             const ana = [
-                ['1. 회사', a.internal || nd],
-                ['2. 업계 (코스닥 제약/NBI)', a.supply || nd],
-                ['3. 매크로 (코스피/코스닥)', a.macro || nd],
+                ['회사', a.internal || nd],
+                ['업계 (코스닥 제약/NBI)', a.supply || nd],
+                ['매크로 (코스피/코스닥)', a.macro || nd],
             ];
 
             // 첫 줄: 금일 종가 지씨셀 10,100원 (▼ 0.98%), 일거래량 54,444주
@@ -670,14 +675,14 @@
             const label = st.includes('장중') ? '현재가' : (st.includes('금일') ? '금일 종가' : '전 거래일 종가');
             const pctRaw = String(s.ratio || '');
             const pctNum = parseFloat(pctRaw);
-            const arrow = Number.isFinite(pctNum) ? (pctNum > 0 ? '▲ ' : (pctNum < 0 ? '▼ ' : '')) : '';
+            const arrow = Number.isFinite(pctNum) ? (pctNum > 0 ? '▲' : (pctNum < 0 ? '▼' : '')) : '';
             const head = `${label} 지씨셀 ${s.price || '-'} (${pctRaw ? arrow + pctRaw.replace(/^[+-]/, '') : '-'}), 일거래량 ${s.volume || '-'}`;
 
             const text =
 `${head}
 
 - 주요 변동요인
-${ana.map(([k, x]) => `   ${k}: ${deltaFmt(x)}`).join('\n')}
+${ana.map(([k, x], i) => `   ${i + 1}. ${k}: ${deltaFmt(x)}`).join('\n')}
 
 - 주요 뉴스
 ${newsText}`;
@@ -686,9 +691,9 @@ ${newsText}`;
 `<div style="font-family:'Malgun Gothic',Arial,sans-serif;font-size:14px;line-height:1.7;color:#111">
 <div><b>${esc(head)}</b></div>
 <div style="margin-top:14px"><b>- 주요 변동요인</b></div>
-<div style="margin-left:14px">${ana.map(([k, x]) => `<div>${esc(k)}: ${deltaFmt(esc(x), (kk, t) => kk === 'up' ? `<span style="color:#d63031">${t}</span>` : (kk === 'down' ? `<span style="color:#2563eb">${t}</span>` : t))}</div>`).join('')}</div>
+<ol style="margin:2px 0 0 0;padding-left:38px">${ana.map(([k, x]) => `<li style="margin-bottom:2px">${esc(k)}: ${deltaFmt(esc(x), (kk, t) => kk === 'up' ? `<span style="color:#d63031">${t}</span>` : (kk === 'down' ? `<span style="color:#2563eb">${t}</span>` : t))}</li>`).join('')}</ol>
 <div style="margin-top:14px"><b>- 주요 뉴스</b></div>
-<div style="margin-left:14px">${newsHtml}</div>
+<div style="margin-left:22px">${newsHtml}</div>
 </div>`;
             return { text, html };
         }
