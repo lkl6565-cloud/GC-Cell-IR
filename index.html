@@ -1,732 +1,690 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>지씨셀 IR 일일보고</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-        body {
-            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
-            background-color: #09090b;
-            color: #f4f4f5;
-            
-            -webkit-tap-highlight-color: transparent;
-        }
-        .spin-animation { animation: spin 0.8s linear infinite; }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: #18181b; }
-        ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 2px; }
-    </style>
-</head>
-<body class="min-h-screen pb-16">
+"""시장 데이터 수집 모듈 (키움증권 REST API 기준) - FastAPI 와 무관한 순수 함수 모음
 
-    <!-- Top Navigation Bar -->
-    <header class="border-b border-zinc-800/80 bg-zinc-950/80 sticky top-0 z-50 backdrop-blur-xl">
-        <div class="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
-            <div class="flex items-center space-x-2.5">
-                <div class="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-xs">GC</div>
-                <!-- screenTitle 동적 바인딩 영역 -->
-                <h1 id="screenTitle" class="text-xs font-bold text-white tracking-tight flex items-center gap-1.5">
-                    지씨셀 IR 일일보고 [로딩 중...]
-                    <span class="px-1.5 py-0.5 text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-mono">AUTO</span>
-                </h1>
-            </div>
-            <div class="flex items-center space-x-2.5">
-                <div class="hidden sm:flex items-center space-x-1.5 text-[11px] text-zinc-400 bg-zinc-900/80 px-2.5 py-1 rounded-lg border border-zinc-800">
-                    <span id="status-dot" class="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>
-                    <span id="update-timestamp">동기화 대기중...</span>
-                </div>
-                <button id="btn-refresh" onclick="refreshData()" class="flex items-center space-x-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 px-3 py-1.5 rounded-lg text-xs border border-zinc-800 transition-all active:scale-95 shadow-sm">
-                    <i data-lucide="refresh-cw" id="refresh-icon" class="w-3.5 h-3.5 text-emerald-400"></i>
-                    <span class="font-medium">새로고침</span>
-                </button>
-            </div>
-        </div>
-    </header>
+- 키움: 지씨셀 시세(시간대 규칙: 장 시작 전=전일종가 / 장중=실시간 / 마감 후=금일종가), 투자자별 수급,
+        코스피·코스닥·코스닥 제약(KQ26 = 업종코드 120)
+- 코스닥 제약(KQ26): 키움 실패 시 Investing.com 으로 대체 (야후 사용 안 함)
+- NBI 지수·원/달러: Yahoo Finance (NBI 는 실패 시 Investing.com)
+- 분석 문구: 수집된 숫자로 만든 자동 문구, GEMINI_API_KEY 가 있으면 실제 데이터만 근거로 AI 요약
+"""
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from html import unescape
+from urllib.parse import urlparse
 
-    <main class="max-w-4xl mx-auto px-4 mt-6 space-y-5">
+import requests
 
-        <!-- Top Action Banner -->
-        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-900/90 border border-zinc-800/80 p-4 rounded-2xl shadow-xl">
-            <div class="space-y-1">
-                <div class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
-                    <i data-lucide="clock" class="w-3.5 h-3.5"></i> 장 마감 후 자동 갱신
-                </div>
-                <p id="banner-desc" class="text-[11px] text-zinc-400">키움증권 REST API, 네이버 API 기준 화면입니다. 조회시점에 따라 수치가 다를 수 있습니다.</p>
-            </div>
-            <button onclick="openEmailModal()" class="w-full sm:w-auto flex items-center justify-center space-x-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-semibold transition-all shadow-lg shadow-emerald-950/50">
-                <i data-lucide="mail" class="w-3.5 h-3.5"></i>
-                <span>보고서 이메일 작성</span>
-            </button>
-        </div>
+CODE, NAME = "144510", "지씨셀"
+KST = timezone(timedelta(hours=9))
 
-        <!-- Grid Container 1: 수급 & 업종지수 -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+INVESTOR_UNIT_WON = 1_000_000
 
-            <!-- 1. 지씨셀 수급 & 주가 카드 -->
-            <section class="bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-5 space-y-4 shadow-xl backdrop-blur-sm flex flex-col justify-between">
-                <div>
-                    <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                        <h2 class="text-sm font-bold text-white flex items-center gap-1.5">
-                            <i data-lucide="trending-up" class="w-4 h-4 text-emerald-400"></i> 1. 지씨셀 수급 및 주가
-                        </h2>
-                        <span id="stock-status-tag" class="text-[10px] px-2 py-0.5 bg-zinc-800 text-zinc-300 rounded font-mono">마감 기준</span>
-                    </div>
+def safe(fn, default, label):
+    """한 항목이 실패해도 전체 보고서는 계속 만든다."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] {label} 실패: {e}", file=sys.stderr)
+        return default
 
-                    <div class="mt-4">
-                        <div class="flex items-baseline space-x-2.5">
-                            <span id="stock-price" class="text-3xl font-black text-white tracking-tight">불러오는 중...</span>
-                            <span id="stock-ratio" class="text-sm font-bold text-zinc-400">-</span>
-                        </div>
-                        <p id="stock-volume-desc" class="text-[11px] text-zinc-400 mt-1">데이터 동기화 대기 중...</p>
-                    </div>
 
-                    <div class="overflow-x-auto mt-4">
-                        <table class="w-full text-xs text-left text-zinc-300">
-                            <thead class="bg-zinc-950/60 text-zinc-400 uppercase text-[10px] tracking-wider border-b border-zinc-800">
-                                <tr class="font-mono">
-                                    <th class="py-2 px-2.5">투자자별</th>
-                                    <th class="py-2 px-2.5 text-right">금일 마감</th>
-                                    <th class="py-2 px-2.5 text-right">최근 5일</th>
-                                </tr>
-                            </thead>
-                            <tbody id="investor-tbody" class="divide-y divide-zinc-800/40 font-mono text-xs">
-                                <tr>
-                                    <td class="py-2 px-2.5 font-sans font-medium text-white">외국인</td>
-                                    <td id="inv-foreign" class="py-2 px-2.5 text-right text-zinc-300 font-bold">-</td>
-                                    <td id="inv-foreign-5d" class="py-2 px-2.5 text-right text-zinc-400">-</td>
-                                </tr>
-                                <tr>
-                                    <td class="py-2 px-2.5 font-sans font-medium text-white">기관</td>
-                                    <td id="inv-organ" class="py-2 px-2.5 text-right text-zinc-300 font-bold">-</td>
-                                    <td id="inv-organ-5d" class="py-2 px-2.5 text-right text-zinc-400">-</td>
-                                </tr>
-                                <tr>
-                                    <td class="py-2 px-2.5 font-sans font-medium text-white">개인</td>
-                                    <td id="inv-personal" class="py-2 px-2.5 text-right text-zinc-300 font-bold">-</td>
-                                    <td id="inv-personal-5d" class="py-2 px-2.5 text-right text-zinc-400">-</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+def num(s):
+    """키움 응답의 '+61300', '-2394.49', '--28837', '1,234' 같은 문자열을 float 로."""
+    if s is None:
+        return None
+    t = str(s).replace(",", "").strip()
+    if not t:
+        return None
+    neg = t.startswith("-")
+    t = t.lstrip("+-")
+    try:
+        v = float(t)
+    except ValueError:
+        return None
+    return -v if neg else v
 
-                <div class="pt-3 border-t border-zinc-800/80 space-y-2.5">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">주요 이슈 (당사 키워드 피드 3선)</h3>
-                        <span class="text-[9px] text-emerald-400 font-mono">지씨셀 · 아티바</span>
-                    </div>
-                    <div id="company-news-container" class="space-y-1.5 text-xs">
-                        <div class="bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-400 text-center animate-pulse text-[11px]">뉴스 불러오는 중...</div>
-                    </div>
-                </div>
-            </section>
 
-            <!-- 3. 업종 지수 & NBI 뉴스 카드 -->
-            <section class="bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-5 space-y-4 shadow-xl backdrop-blur-sm flex flex-col justify-between">
-                <div>
-                    <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                        <h2 class="text-sm font-bold text-white flex items-center gap-1.5">
-                            <i data-lucide="bar-chart-3" class="w-4 h-4 text-blue-400"></i> 2. 업종지수
-                        </h2>
-                        <span class="text-[10px] px-2 py-0.5 bg-blue-950/60 text-blue-400 border border-blue-800/50 rounded font-mono">마감 기준</span>
-                    </div>
+def pct_str(v):
+    return f"{v:+.2f}%"
 
-                    <div class="overflow-x-auto mt-4">
-                        <table class="w-full text-xs text-left text-zinc-300">
-                            <thead class="bg-zinc-950/60 text-zinc-400 uppercase text-[10px] tracking-wider border-b border-zinc-800">
-                                <tr class="font-mono">
-                                    <th class="py-2 px-2.5">지표</th>
-                                    <th class="py-2 px-2.5 text-right">값</th>
-                                    <th class="py-2 px-2.5 text-right">변화율</th>
-                                </tr>
-                            </thead>
-                            <tbody id="indices-tbody" class="divide-y divide-zinc-800/40 font-mono text-xs">
-                                <tr>
-                                    <td class="py-2.5 px-2.5 font-sans font-medium text-white">나스닥 바이오(NBI)</td>
-                                    <td id="nbi-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
-                                    <td id="nbi-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
-                                </tr>
-                                <tr>
-                                    <td class="py-2.5 px-2.5 font-sans font-medium text-white">미국 바이오 ETF (XBI)</td>
-                                    <td id="xbi-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
-                                    <td id="xbi-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
-                                </tr>
-                                <tr>
-                                    <td class="py-2.5 px-2.5 font-sans font-medium text-white">코스닥 제약 (KQ26)</td>
-                                    <td id="kq26-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
-                                    <td id="kq26-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
 
-                <div class="pt-3 border-t border-zinc-800/80 space-y-2.5">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">NBI 포함 주요 종목 뉴스 (3선)</h3>
-                        <span class="text-[9px] text-blue-400 font-mono">NBI 구성</span>
-                    </div>
-                    <div id="nbi-news-container" class="space-y-1.5 text-xs">
-                        <div class="bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-400 text-center animate-pulse text-[11px]">NBI 뉴스 불러오는 중...</div>
-                    </div>
-                </div>
-            </section>
-        </div>
+def eok(won):
+    v = won / 1e8
+    # 1억 미만의 소액은 소수 둘째 자리까지 (0.02억이 '0.0억'으로 사라지지 않게)
+    return f"{v:+,.2f}억" if 0 < abs(v) < 1 else f"{v:+,.1f}억"
 
-        <!-- Grid Container 2: IR 주가변동 3대 요인 분석 & 매크로 지표 -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
 
-            <!-- 2. IR 주가변동 3대 요인 분석 (IR 톤 적용 + AI / 자동집계 배지 포함) -->
-            <section class="md:col-span-2 bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-5 space-y-4 shadow-xl backdrop-blur-sm">
-                <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                    <h2 class="text-sm font-bold text-white flex items-center gap-1.5">
-                        <i data-lucide="zap" class="w-4 h-4 text-amber-400"></i> 3. IR 주가변동 3대 핵심 요인 분석
-                    </h2>
-                    <!-- analysis.is_ai 상태에 따라 동적으로 변경되는 배지 컨테이너 -->
-                    <div id="ai-status-badge">
-                        <span class="text-[9px] px-2 py-0.5 bg-zinc-800 text-zinc-400 rounded font-mono">집계 대기중</span>
-                    </div>
-                </div>
+def tone(s):
+    """한국식: 상승 빨강 / 하락 파랑 / 0·없음 회색"""
+    v = num(str(s or "").replace("억", "").replace("%", ""))
+    if v is None or v == 0:
+        return "#666"
+    return "#d62728" if v > 0 else "#1f5fbf"
 
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                    <div class="bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/70 space-y-2">
-                        <div class="font-bold text-emerald-400 flex items-center gap-1.5 border-b border-zinc-800/60 pb-1.5">
-                            <i data-lucide="newspaper" class="w-3.5 h-3.5"></i> 1. 당사 기반
-                        </div>
-                        <p id="analysis-internal" class="text-zinc-300 text-[11px] leading-relaxed">데이터 수종 대기 중...</p>
-                    </div>
+class Kiwoom:
+    def __init__(self, appkey, secretkey, mock=False):
+        self.appkey, self.secretkey = appkey, secretkey
+        self.host = "https://mockapi.kiwoom.com" if mock else "https://api.kiwoom.com"
+        self.token = None
 
-                    <div class="bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/70 space-y-2">
-                        <div class="font-bold text-blue-400 flex items-center gap-1.5 border-b border-zinc-800/60 pb-1.5">
-                            <i data-lucide="users" class="w-3.5 h-3.5"></i> 2. 업계 기반 (코스닥제약/NBI)
-                        </div>
-                        <p id="analysis-supply-external" class="text-zinc-300 text-[11px] leading-relaxed">데이터 수종 대기 중...</p>
-                    </div>
+    def login(self):
+        r = requests.post(
+            f"{self.host}/oauth2/token",
+            headers={"Content-Type": "application/json;charset=UTF-8"},
+            json={"grant_type": "client_credentials", "appkey": self.appkey, "secretkey": self.secretkey},
+            timeout=10,
+        )
+        d = r.json()
+        if not d.get("token") or d.get("return_code") not in (None, 0, "0"):
+            raise RuntimeError(
+                f"토큰 발급 실패: {d.get('return_msg')} "
+                "(키움 REST API 포털 > 계좌 APP Key 관리에서 현재 PC의 IP를 등록했는지 확인)"
+            )
+        self.token = d["token"]
 
-                    <div class="bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/70 space-y-2">
-                        <div class="font-bold text-purple-400 flex items-center gap-1.5 border-b border-zinc-800/60 pb-1.5">
-                            <i data-lucide="globe" class="w-3.5 h-3.5"></i> 3. 매크로 기반 (증시/환율)
-                        </div>
-                        <p id="analysis-macro-sector" class="text-zinc-300 text-[11px] leading-relaxed">데이터 수종 대기 중...</p>
-                    </div>
-                </div>
-            </section>
+    def post(self, path, api_id, body, retries=3):
+        for i in range(retries):
+            r = requests.post(
+                self.host + path,
+                headers={
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "api-id": api_id,
+                    "authorization": f"Bearer {self.token}",
+                },
+                json=body,
+                timeout=15,
+            )
+            if r.status_code == 429:  # 요청 제한: 잠시 쉬고 재시도
+                time.sleep(1.5 * (i + 1))
+                continue
+            r.raise_for_status()
+            d = r.json()
+            # 업무 오류도 HTTP 200 으로 오므로 return_code 로 판별
+            if d.get("return_code") not in (0, "0"):
+                raise RuntimeError(f"{api_id} 오류: {d.get('return_msg')}")
+            time.sleep(0.3)
+            return d
+        raise RuntimeError(f"{api_id}: 요청 제한(429)이 계속됨")
 
-            <!-- 4. 매크로 지표 -->
-            <section class="bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-5 space-y-3 shadow-xl backdrop-blur-sm">
-                <h2 class="text-sm font-bold text-white border-b border-zinc-800/80 pb-3 flex items-center gap-1.5">
-                    <i data-lucide="globe-2" class="w-4 h-4 text-purple-400"></i> 4. 매크로 지표
-                </h2>
-                <div class="overflow-x-auto pt-1">
-                    <table class="w-full text-xs text-left text-zinc-300 font-mono">
-                        <tbody id="macro-tbody" class="divide-y divide-zinc-800/40 text-xs">
-                            <tr>
-                                <td class="py-2.5 font-sans font-medium text-white">코스피</td>
-                                <td id="macro-kospi-val" class="py-2.5 text-right text-white font-bold">-</td>
-                                <td id="macro-kospi-ratio" class="py-2.5 text-right text-zinc-400 font-bold">-</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 font-sans font-medium text-white">코스닥</td>
-                                <td id="macro-kosdaq-val" class="py-2.5 text-right text-white font-bold">-</td>
-                                <td id="macro-kosdaq-ratio" class="py-2.5 text-right text-zinc-400 font-bold">-</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 font-sans font-medium text-white">원/달러</td>
-                                <td id="macro-fx-val" class="py-2.5 text-right text-white font-bold">-</td>
-                                <td id="macro-fx-ratio" class="py-2.5 text-right text-zinc-400 font-bold">-</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 font-sans font-medium text-white">미국 10년물</td>
-                                <td id="macro-us10y-val" class="py-2.5 text-right text-white font-bold">-</td>
-                                <td id="macro-us10y-ratio" class="py-2.5 text-right text-zinc-400 font-bold">-</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-            <!-- 5. [GC] 종목별 주가·수급 -->
-            <section class="md:col-span-3 bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-5 space-y-3 shadow-xl backdrop-blur-sm">
-                <h2 class="text-sm font-bold text-white border-b border-zinc-800/80 pb-3 flex items-center gap-1.5">
-                    <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i> 5. GC
-                    <span id="peer-basis" class="ml-1 text-[10px] font-normal text-amber-400 border border-amber-500/40 rounded px-1.5 py-0.5">종가 기준</span>
-                </h2>
-                <div class="overflow-x-auto pt-1">
-                    <table class="w-full text-xs text-left text-zinc-300 font-mono whitespace-nowrap">
-                        <thead>
-                            <tr class="text-zinc-500 font-sans">
-                                <th class="py-2 pr-3 font-normal">종목</th>
-                                <th class="py-2 px-2 text-right font-normal">종가</th>
-                                <th class="py-2 px-2 text-right font-normal">등락률</th>
-                                <th class="hidden md:table-cell py-2 px-2 text-right font-normal">거래량</th>
-                                <th class="hidden md:table-cell py-2 pl-2 text-right font-normal">수급(억) 외국인 / 기관 / 개인</th>
-                            </tr>
-                        </thead>
-                        <tbody id="peer-tbody" class="divide-y divide-zinc-800/40">
-                            <tr><td colspan="5" class="py-3 text-zinc-500 font-sans">데이터 수신 대기 중...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
+    def revoke(self):
+        if not self.token:
+            return
+        try:
+            requests.post(
+                f"{self.host}/oauth2/revoke",
+                headers={"Content-Type": "application/json;charset=UTF-8"},
+                json={"appkey": self.appkey, "secretkey": self.secretkey, "token": self.token},
+                timeout=10,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
-        </div>
+def stock_block(kw, code=CODE):
+    d = kw.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": code})
+    price, ratio, vol = num(d.get("cur_prc")), num(d.get("flu_rt")), num(d.get("trde_qty"))
+    if price is None or ratio is None:
+        raise RuntimeError(f"ka10001 응답 필드 확인 필요: {list(d)[:12]}")
+    return {
+        "price": f"{abs(price):,.0f}원",
+        "ratio": pct_str(ratio),
+        "volume": f"{abs(vol or 0):,.0f}주",
+        "marketStatus": "정규장 마감",
+    }
 
-        <footer class="text-[11px] text-zinc-500 pt-4 border-t border-zinc-800/80 flex flex-col sm:flex-row items-center justify-between gap-2">
-            <div>시세·수급·지수: <span class="text-zinc-400">키움증권 REST API</span> · NBI·환율: Yahoo Finance · 뉴스: 네이버(지씨셀)·구글(NBI)</div>
-            <div>지씨셀 IR 일일보고 자동화 시스템(Copyright © dhkim0521)</div>
-        </footer>
-    </main>
 
-    <!-- Email Modal -->
-    <div id="email-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-zinc-900 border border-zinc-800 w-full max-w-sm rounded-2xl p-5 space-y-4 shadow-2xl">
-            <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
-                <h3 class="text-sm font-bold text-white flex items-center gap-1.5">
-                    <i data-lucide="mail" class="w-4 h-4 text-emerald-400"></i> 보고서 이메일 작성
-                </h3>
-                <button onclick="closeEmailModal()" class="text-zinc-400 hover:text-white transition-colors">
-                    <i data-lucide="x" class="w-4 h-4"></i>
-                </button>
-            </div>
-            <div class="space-y-3 text-xs">
-                <div>
-                    <label class="block text-zinc-400 mb-1 font-medium">수신자 이메일 주소</label>
-                    <input type="email" id="recipient-email" placeholder="example@email.com" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-colors">
-                </div>
-                <div>
-                    <label class="block text-zinc-400 mb-1 font-medium">메일 제목</label>
-                    <input type="text" id="email-subject" value="지씨셀 IR 일일보고" oninput="this.dataset.edited='1'" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-colors">
-                </div>
-                <p class="text-[10px] text-zinc-500">버튼을 누르면 사용 중인 메일 앱이 열립니다. 매일 자동 발송은 별도로 설정된 주소로 나갑니다.</p>
-            </div>
-            <div class="flex space-x-2 pt-2">
-                <button onclick="closeEmailModal()" class="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 py-2.5 rounded-xl text-xs font-semibold transition-all">취소</button>
-                <button onclick="sendEmail()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-semibold transition-all shadow-lg shadow-emerald-950/50">메일 앱 열기</button>
-                <button onclick="copyRichEmail()" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-white py-2.5 rounded-xl text-xs font-semibold transition-all">하이퍼링크 본문 복사</button>
-            </div>
-        </div>
-    </div>
+def daily_bars(kw, ymd, code=CODE):
+    """ka10081 주식일봉차트: 종목코드 '144510'(접미사 없음) = KRX 정규장 기준 일봉. 최신순 정렬."""
+    d = kw.post("/api/dostk/chart", "ka10081", {"stk_cd": code, "base_dt": ymd, "upd_stkpc_tp": "1"})
+    rows = [r for r in (d.get("stk_dt_pole_chart_qry") or []) if r.get("dt") and num(r.get("cur_prc")) is not None]
+    if not rows:
+        raise RuntimeError(f"ka10081 응답에 일봉이 없음: {list(d)[:8]}")
+    return sorted(rows, key=lambda r: r["dt"], reverse=True)
 
-    <script>
-        lucide.createIcons();
 
-        const DATA_URL = "data.json";
-        const REFRESH_URL = "api/refresh";
-        const STALE_DAYS = 4;
-        let store = {};
-
-        const $ = (id) => document.getElementById(id);
-
-        function setText(id, v) {
-            const el = $(id);
-            if (el && v !== undefined && v !== null && v !== '') el.textContent = String(v);
-        }
-
-        // 요약 문구의 +/- 수치를 삼각형으로: 양수 ▲(빨강), 음수 ▼(파랑). 날짜(11-09)·기사 제목 속 하이픈은 건드리지 않음.
-        const DELTA_RE = /(?<![\w.,])([+\-\u2212])(\d[\d,]*(?:\.\d+)?)(%p|%|억원|억|원|bp)?/g;
-        function deltaFmt(text, wrap) {
-            return String(text == null ? '' : text).replace(DELTA_RE, (m, sg, num, unit) => {
-                const val = parseFloat(num.replace(/,/g, ''));
-                if (!Number.isFinite(val) || val === 0) return wrap ? wrap('', num + (unit || '')) : num + (unit || '');
-                const up = sg === '+';
-                return wrap ? wrap(up ? 'up' : 'down', (up ? '▲' : '▼') + num + (unit || '')) : (up ? '▲' : '▼') + num + (unit || '');
-            });
-        }
-        function setDeltaHtml(id, text) {
-            const el = $(id);
-            if (!el || text === undefined || text === null || text === '') return;
-            const esc1 = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-            // 이스케이프 후 치환 (수치에는 <>& 가 없으므로 안전)
-            el.innerHTML = deltaFmt(esc1(text), (k, t) => k === 'up' ? `<span style="color:#f43f5e;font-weight:600">${t}</span>` : (k === 'down' ? `<span style="color:#38bdf8;font-weight:600">${t}</span>` : t));
-        }
-
-        function toneClass(v) {
-            const s = String(v ?? '');
-            if (s.startsWith('+') && !/^\+0(\.0+)?%?$/.test(s)) return 'text-rose-500';
-            if (s.startsWith('-')) return 'text-sky-400';
-            return 'text-zinc-400';
-        }
-
-        function setTone(id, v, base) {
-            const el = $(id);
-            if (!el) return;
-            el.textContent = (v === undefined || v === null || v === '') ? '-' : String(v);
-            el.className = `${base} ${toneClass(v)}`;
-        }
-
-        function safeUrl(u) {
-            try {
-                const url = new URL(u);
-                return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '#';
-            } catch (_) { return '#'; }
-        }
-
-        function formatDateToMMDD(dateStr) {
-            if (!dateStr) return '00/00';
-            let s = String(dateStr).trim();
-            let match = s.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})$/);
-            if (match) {
-                let m = match[2].padStart(2, '0');
-                let d = match[3].padStart(2, '0');
-                return `${m}/${d}`;
+def _bar_quote(rows, i, status, kw=None, code=CODE):
+    """i번째 일봉의 종가·전일대비·거래량 (전일대비는 바로 앞 영업일 종가 기준).
+    최신 일봉(i==0)은 일봉 간 값이 어긋날 수 있어, 시세 조회(ka10001)의 기준가(base_pric=전일 종가)가
+    있고 현재가가 일봉 종가와 같으면 그 기준가를 전일 종가로 쓴다 (HTS 등락률과 일치)."""
+    close = abs(num(rows[i]["cur_prc"]))
+    prev = abs(num(rows[i + 1]["cur_prc"])) if i + 1 < len(rows) else None
+    # 1순위: 같은 일봉 행의 전일대비(pred_pre) — HTS 일별 시세의 등락과 같은 기준
+    pp = num(rows[i].get("pred_pre"))
+    if pp is not None:
+        sig = str(rows[i].get("pred_pre_sig") or "")
+        mag = abs(pp)
+        neg = str(rows[i].get("pred_pre", "")).strip().startswith("-") or sig in ("4", "5")
+        base = close + mag if neg else close - mag
+        if base > 0:
+            return {
+                "price": f"{close:,.0f}원",
+                "ratio": pct_str((close - base) / base * 100),
+                "volume": f"{abs(num(rows[i].get('trde_qty')) or 0):,.0f}주",
+                "marketStatus": status,
             }
-            match = s.match(/^(\d{1,2})[-./](\d{1,2})$/);
-            if (match) {
-                let m = match[1].padStart(2, '0');
-                let d = match[2].padStart(2, '0');
-                return `${m}/${d}`;
-            }
-            return s.length >= 5 ? s.substring(s.length - 5) : '11/05';
-        }
+    if i == 0 and kw is not None:
+        try:
+            q = kw.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": code})
+            base, cur = num(q.get("base_pric")), num(q.get("cur_prc"))
+            if base and cur is not None and abs(abs(cur) - close) <= 0.5:
+                prev = abs(base)
+        except Exception as e:  # noqa: BLE001
+            print(f"[경고] 기준가 조회 실패, 일봉 전일 종가 사용: {e}")
+    return {
+        "price": f"{close:,.0f}원",
+        "ratio": pct_str((close - prev) / prev * 100) if prev else "-",
+        "volume": f"{abs(num(rows[i].get('trde_qty')) or 0):,.0f}주",
+        "marketStatus": status,
+    }
 
-        function renderPeers(d) {
-            const tb = $('peer-tbody');
-            if (!tb) return;
-            const s = d.stock || {};
-            const st = String(s.marketStatus || '');
-            const basis = $('peer-basis');
-            if (basis) basis.textContent = st.includes('장중') ? '장중 실시간' : (st.includes('금일') ? '금일 종가 기준' : '전 거래일 종가 기준');
-            const rows = [];
-            if (s.price) rows.push({ name: '지씨셀', code: '144510', price: s.price, ratio: s.ratio, volume: s.volume, investor: s.investor, me: true });
-            (Array.isArray(d.peerTable) ? d.peerTable : []).forEach(r => rows.push(r));
-            tb.textContent = '';
-            if (!rows.length) {
-                const tr = document.createElement('tr'), td = document.createElement('td');
-                td.colSpan = 5; td.className = 'py-3 text-zinc-500 font-sans'; td.textContent = '데이터 없음';
-                tr.appendChild(td); tb.appendChild(tr); return;
-            }
-            const cell = (txt, cls) => { const td = document.createElement('td'); td.className = cls; td.textContent = (txt === undefined || txt === null || txt === '') ? '-' : String(txt); return td; };
-            rows.forEach(r => {
-                const tr = document.createElement('tr');
-                if (r.me) tr.className = 'bg-emerald-500/10';
-                const n = document.createElement('td');
-                n.className = 'py-2.5 pr-3 font-sans font-semibold text-white';
-                n.textContent = r.name + ' ';
-                const c = document.createElement('span'); c.className = 'text-[10px] font-normal text-zinc-500'; c.textContent = r.code; n.appendChild(c);
-                tr.appendChild(n);
-                tr.appendChild(cell(r.price, 'py-2.5 px-2 text-right font-bold ' + toneClass(r.ratio)));
-                tr.appendChild(cell(r.ratio, 'py-2.5 px-2 text-right font-bold ' + toneClass(r.ratio)));
-                tr.appendChild(cell(r.volume ? String(r.volume).replace('주', '') : '', 'hidden md:table-cell py-2.5 px-2 text-right text-zinc-300'));
-                const sup = document.createElement('td'); sup.className = 'hidden md:table-cell py-2.5 pl-2 text-right';
-                const inv = r.investor;
-                if (inv) {
-                    [['외', inv.foreign], ['기', inv.organ], ['개', inv.personal]].forEach(([k, val], i) => {
-                        if (i) sup.appendChild(document.createTextNode(' / '));
-                        const sp = document.createElement('span'); sp.className = toneClass(val);
-                        sp.textContent = k + ' ' + String(val ?? '-').replace('억', ''); sup.appendChild(sp);
-                    });
-                } else sup.textContent = '-';
-                tr.appendChild(sup);
-                tb.appendChild(tr);
-            });
-        }
 
-        function renderNews(containerId, items, badgeColor) {
-            const box = $(containerId);
-            if (!box) return;
-            
-            const targetItems = (Array.isArray(items) && items.length > 0) ? items : (store[containerId === 'company-news-container' ? 'companyNews' : 'nbiNews'] || []);
+MARKET_OPEN, MARKET_CLOSE = 9 * 60, 15 * 60 + 30  # 한국시간 09:00 / 15:30 (분 단위)
 
-            if (!Array.isArray(targetItems) || targetItems.length === 0) {
-                box.replaceChildren();
-                const empty = document.createElement('div');
-                empty.className = 'bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-500 text-center text-[11px]';
-                empty.textContent = '최근 뉴스가 없습니다.';
-                box.appendChild(empty);
-                return;
-            }
 
-            box.replaceChildren();
-            targetItems.slice(0, 3).forEach((item) => {
-                const card = document.createElement('div');
-                card.className = 'bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 hover:border-zinc-700 transition-all';
-                const row = document.createElement('div');
-                row.className = 'flex items-center gap-2';
+def price_block(kw, now, code=CODE):
+    """한국시간 기준 가격 규칙
+      1) 00:00~09:00        : 전일 종가
+      2) 09:00~15:30        : 당일 실시간 현재가
+      3) 15:30~24:00        : 당일 종가 (KRX 정규장 종가, 시간외 단일가 제외)
+    휴장일(오늘 일봉이 없음)에는 항상 직전 거래일 종가를 보여준다."""
+    ymd = now.strftime("%Y%m%d")
+    hm = now.hour * 60 + now.minute
+    rows = daily_bars(kw, ymd, code)
+    today_bar = rows[0]["dt"] == ymd
 
-                const badge = document.createElement('span');
-                badge.className = `px-1.5 py-0.5 text-[9px] bg-zinc-800 ${badgeColor} font-mono rounded shrink-0`;
-                
-                const formattedDate = formatDateToMMDD(item.date);
-                badge.textContent = `[${formattedDate}]`;
+    if hm < MARKET_OPEN:
+        return _bar_quote(rows, 1 if today_bar else 0, "전일 종가 (장 시작 전)")
+    if hm < MARKET_CLOSE:
+        if today_bar or hm < MARKET_OPEN + 5:  # 개장 직후 몇 분은 일봉 생성 전일 수 있음
+            st = stock_block(kw, code)
+            st["marketStatus"] = "장중 (실시간)"
+            return st
+        return _bar_quote(rows, 0, "전 거래일 종가 (휴장)", kw, code)
+    if today_bar:
+        return _bar_quote(rows, 0, "금일 종가 (정규장 마감)", kw, code)
+    return _bar_quote(rows, 0, "전 거래일 종가 (휴장 또는 집계 지연)", kw, code)
 
-                const a = document.createElement('a');
-                a.href = safeUrl(item.linkUrl || item.url);
-                a.target = '_blank';
-                a.rel = 'noopener noreferrer';
-                a.className = 'font-medium text-white hover:underline truncate text-[11px]';
-                a.textContent = item.title || '(제목 없음)';
 
-                const pub = document.createElement('span');
-                pub.className = 'text-zinc-500 font-normal';
-                pub.textContent = ` (${item.publisher || '뉴스'})`;
-                a.appendChild(pub);
+def investor_rows(kw, ymd, code=CODE):
+    d = kw.post(
+        "/api/dostk/stkinfo",
+        "ka10059",
+        {"dt": ymd, "stk_cd": code, "amt_qty_tp": "1", "trde_tp": "0", "unit_tp": "1000"},
+    )
+    rows = d.get("stk_invsr_orgn") or []
+    if not rows:
+        raise RuntimeError(f"ka10059 응답에 일별 데이터가 없음: {list(d)[:8]}")
+    return sorted(rows, key=lambda r: r.get("dt", ""), reverse=True)
 
-                row.append(badge, a);
-                card.appendChild(row);
-                box.appendChild(card);
-            });
-        }
 
-        function setStatus(ok, text) {
-            setText('update-timestamp', text);
-            const dot = $('status-dot');
-            if (dot) dot.className = `w-1.5 h-1.5 rounded-full ${ok ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`;
-        }
+def investor_block(rows):
+    cols = {"foreign": "frgnr_invsr", "organ": "orgn", "personal": "ind_invsr"}
 
-        async function getJson(url, timeoutMs) {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
-            try {
-                const res = await fetch(`${url}?_t=${Date.now()}`, { signal: controller.signal, cache: 'no-store' });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                return await res.json();
-            } finally {
-                clearTimeout(timer);
-            }
-        }
+    def total(sub, col):
+        return sum((num(r.get(col)) or 0) for r in sub) * INVESTOR_UNIT_WON
 
-        async function postJson(url, timeoutMs) {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
-            try {
-                const res = await fetch(`${url}?_t=${Date.now()}`, { method: 'POST', signal: controller.signal, cache: 'no-store' });
-                if (!res.ok) {
-                    let msg = `HTTP ${res.status}`;
-                    try { msg = (await res.json()).error || msg; } catch (_) {}
-                    throw new Error(msg);
-                }
-                return await res.json();
-            } finally {
-                clearTimeout(timer);
-            }
-        }
+    return {
+        **{k: eok(total(rows[:1], c)) for k, c in cols.items()},
+        "5d": {k: eok(total(rows[:5], c)) for k, c in cols.items()},
+    }
 
-        async function fetchLiveData(manual = false) {
-            const btn = $('btn-refresh');
-            const icon = $('refresh-icon');
-            if (icon) icon.classList.add('spin-animation');
-            if (btn) btn.disabled = true;
 
-            try {
-                let newData;
-                if (manual) {
-                    setText('update-timestamp', '시세·수급·뉴스를 새로 가져오는 중... (최대 1분)');
-                    newData = await postJson(REFRESH_URL, 90000);
-                } else {
-                    newData = await getJson(DATA_URL, 60000);
-                }
-                
-                if (newData) {
-                    store = {
-                        ...newData,
-                        stock: {
-                            ...(store.stock || {}),
-                            ...(newData.stock || {}),
-                            price: (newData.stock && newData.stock.price) ? newData.stock.price : (store.stock ? store.stock.price : '10,290'),
-                            ratio: (newData.stock && newData.stock.ratio) ? newData.stock.ratio : (store.stock ? store.stock.ratio : '+2.80%'),
-                        },
-                        companyNews: (newData.companyNews && newData.companyNews.length > 0) ? newData.companyNews : (store.companyNews || []),
-                        nbiNews: (newData.nbiNews && newData.nbiNews.length > 0) ? newData.nbiNews : (store.nbiNews || [])
-                    };
-                }
-                render(store);
-            } catch (err) {
-                console.warn('데이터 로드 실패, 기존 캐시/데이터 유지:', err);
-                try {
-                    const fallbackData = await getJson(DATA_URL, 60000);
-                    if (fallbackData) store = fallbackData;
-                    render(store);
-                } catch (e) {
-                    setStatus(false, `데이터 로드 실패: ${err.message}`);
-                }
-            } finally {
-                if (icon) icon.classList.remove('spin-animation');
-                if (btn) btn.disabled = false;
-            }
-        }
+def sector_index(kw, mrkt_tp, inds_cd):
+    d = kw.post("/api/dostk/sect", "ka20001", {"mrkt_tp": mrkt_tp, "inds_cd": inds_cd})
+    price, ratio = num(d.get("cur_prc")), num(d.get("flu_rt"))
+    if price is None or ratio is None:
+        raise RuntimeError(f"ka20001 응답 필드 확인 필요: {list(d)[:12]}")
+    return {"value": f"{abs(price):,.2f}", "ratio": pct_str(ratio)}
 
-        function render(d) {
-            let fresh = true;
-            if (d.tradingDate) {
-                const age = (Date.now() - new Date(`${d.tradingDate}T00:00:00+09:00`).getTime()) / 86400000;
-                fresh = age <= STALE_DAYS;
-            }
-            setStatus(fresh, `${fresh ? '동기화 완료' : '오래된 데이터'}: ${d.updatedAt || d.tradingDate || '-'}`);
 
-            // 1. screenTitle 동적 바인딩 반영
-            if (d.screenTitle) {
-                const titleEl = $('screenTitle');
-                if (titleEl) {
-                    titleEl.innerHTML = `${d.screenTitle} <span class="px-1.5 py-0.5 text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-mono">AUTO</span>`;
-                }
-            }
+def sector_names(kw, mrkt_tp):
+    """ka10101(업종코드 리스트) -> {업종코드: 업종명}"""
+    d = kw.post("/api/dostk/stkinfo", "ka10101", {"mrkt_tp": mrkt_tp})
+    out = {}
+    for v in d.values():
+        if not isinstance(v, list):
+            continue
+        for it in v:
+            if isinstance(it, dict):
+                code = it.get("code") or it.get("inds_cd")
+                name = str(it.get("name") or it.get("inds_nm") or "").strip()
+                if code and name:
+                    out[str(code)] = name
+    return out
 
-            const s = d.stock || {};
-            setText('stock-price', s.price);
-            setTone('stock-ratio', s.ratio, 'text-sm font-bold');
-            if (s.volume) setText('stock-volume-desc', `거래량 ${s.volume} · ${s.marketStatus || '마감 기준'}`);
 
-            const inv = s.investor;
-            const invBase = 'py-2 px-2.5 text-right font-bold';
-            const inv5Base = 'py-2 px-2.5 text-right';
-            if (inv) {
-                setTone('inv-foreign', inv.foreign, invBase);
-                setTone('inv-organ', inv.organ, invBase);
-                setTone('inv-personal', inv.personal, invBase);
-                const f5 = inv['5d'] || {};
-                setTone('inv-foreign-5d', f5.foreign, inv5Base);
-                setTone('inv-organ-5d', f5.organ, inv5Base);
-                setTone('inv-personal-5d', f5.personal, inv5Base);
-            }
+def find_sector_code(names, keyword):
+    """이름이 정확히 keyword 인 업종을 우선, 없으면 keyword 가 포함된 첫 업종."""
+    exact = partial = None
+    for code, name in names.items():
+        if keyword not in name:
+            continue
+        if name.replace("코스닥", "").replace("KOSDAQ", "").strip() == keyword:
+            exact = exact or (code, name)
+        partial = partial or (code, name)
+    return exact or partial
 
-            renderNews('company-news-container', d.companyNews, 'text-emerald-400');
-            renderNews('nbi-news-container', d.nbiNews, 'text-blue-400');
-            renderPeers(d);
 
-            const m = d.macroIndices || {};
-            const idxBase = 'py-2.5 px-2.5 text-right font-bold';
-            const macBase = 'py-2.5 text-right font-bold';
-            if (m.nbi) { setText('nbi-val', m.nbi.value); setTone('nbi-ratio', m.nbi.ratio, idxBase); }
-            if (m.xbi) { setText('xbi-val', m.xbi.value); setTone('xbi-ratio', m.xbi.ratio, idxBase); }
-            if (m.kq26) { setText('kq26-val', m.kq26.value); setTone('kq26-ratio', m.kq26.ratio, idxBase); }
-            if (m.kospi) { setText('macro-kospi-val', m.kospi.value); setTone('macro-kospi-ratio', m.kospi.ratio, macBase); }
-            if (m.kosdaq) { setText('macro-kosdaq-val', m.kosdaq.value); setTone('macro-kosdaq-ratio', m.kosdaq.ratio, macBase); }
-            if (m.us10y) { setText('macro-us10y-val', m.us10y.value); setTone('macro-us10y-ratio', m.us10y.change || m.us10y.ratio, macBase); }
-            if (m.usdKrw) { setText('macro-fx-val', m.usdKrw.value); setTone('macro-fx-ratio', m.usdKrw.change || m.usdKrw.ratio, macBase); }
+PHARMA_CODE_DEFAULT = "120"  # 키움 지수차트의 '제약 120' = 코스닥 제약(KQ26)
 
-            // 2. 분석 내용 및 analysis.is_ai 상태에 따른 배지 동적 렌더링
-            const a = d.analysis || {};
-            if (a.internal) setDeltaHtml('analysis-internal', a.internal);
-            if (a.supply) setDeltaHtml('analysis-supply-external', a.supply);
-            if (a.macro) setDeltaHtml('analysis-macro-sector', a.macro);
 
-            const badgeContainer = $('ai-status-badge');
-            if (badgeContainer) {
-                if (a.is_ai) {
-                    badgeContainer.innerHTML = '<span class="text-[9px] px-2 py-0.5 bg-blue-950/60 text-blue-400 border border-blue-800/50 rounded font-mono">✨ Gemini AI 요약</span>';
-                } else {
-                    badgeContainer.innerHTML = '<span class="text-[9px] px-2 py-0.5 bg-amber-950/60 text-amber-400 border border-amber-800/50 rounded font-mono">기업·업계·매크로</span>';
-                }
-            }
-        }
+def kosdaq_pharma_kiwoom(kw):
+    """KQ26(코스닥 제약). KQ26 은 Investing.com 표기이고 키움에서는 업종코드 120 이다."""
+    code = os.environ.get("PHARMA_CODE") or PHARMA_CODE_DEFAULT
+    # 업종명 대조는 참고용: 목록 조회가 안 돼도 120 으로 그대로 조회한다
+    name = safe(lambda: sector_names(kw, "1"), {}, "업종코드 목록(ka10101)").get(code)
+    if name and "제약" not in name:
+        print(f"[경고] 업종코드 {code} 의 업종명은 '{name}' 입니다. 코스닥 제약이 맞는지 확인하세요.", file=sys.stderr)
+    else:
+        print(f"코스닥 제약 업종코드: {code}" + (f" ({name})" if name else ""))
+    return sector_index(kw, "1", code)
 
-        function refreshData() { fetchLiveData(true); }
+def kq26_quote(kw):
+    """코스닥 제약(KQ26): 키움(업종코드 120) 우선, 실패하거나 키움 연결이 없으면 Investing.com."""
+    if kw is not None:
+        try:
+            return kosdaq_pharma_kiwoom(kw)
+        except Exception as e:  # noqa: BLE001
+            print(f"[경고] 키움 KQ26 실패 -> Investing.com 으로 대체: {e}", file=sys.stderr)
+    return investing_quote("kosdaq-pharmaceuticals")
 
-        function defaultEmailSubject() {
-            const m = String((store && store.tradingDate) || '').match(/^\d{4}-(\d{2})-(\d{2})/);
-            const kst = new Date(Date.now() + 9 * 3600 * 1000).toISOString();
-            const mm = m ? m[1] : kst.slice(5, 7), dd = m ? m[2] : kst.slice(8, 10);
-            return `${mm}/${dd} 지씨셀 IR 일일보고`;
-        }
-        function openEmailModal() {
-            const sj = $('email-subject');
-            if (sj && !sj.dataset.edited) sj.value = defaultEmailSubject();
-            $('email-modal').classList.remove('hidden');
-        }
-        function closeEmailModal() { $('email-modal').classList.add('hidden'); }
 
-        // ---------- 메일 본문 (양식) ----------
-        // 구성: 1 주가·수급 / 2 3대 요인 분석 / 3 주요 뉴스(지씨셀+NBI 통합) / 4 업종 지수·매크로
-        function buildReport() {
-            const d = store || {};
-            const s = d.stock || {};
-            const inv = s.investor || {};
-            const f5 = inv['5d'] || {};
-            const m = d.macroIndices || {};
-            const a = d.analysis || {};
-            const v = (x, k = 'value') => (x && x[k]) || '-';
-            const nd = '데이터 없음';
-            const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-            const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '');
+def yf_pair(symbol):
+    import yfinance as yf
 
-            // 뉴스: 최근 공시(DART) + 지씨셀 뉴스(최대 3건) + 종가 시황 1건 + NBI 뉴스(최대 2건) -> 날짜 최신순, 1건 = 1줄
-            // 형식: [11/16] 제목 (언론사)   (공시는 언론사·링크 없이 제목만)
-            const mmdd = (x) => formatDateToMMDD(x);
-            const news = [
-                ...(s.disclosures || []).slice(0, 3).map((n) => ({ date: n.date, title: n.title, publisher: '', linkUrl: '' })),
-                ...(d.companyNews || []).slice(0, 3),
-                ...(d.marketNews || []).slice(0, 1),
-                ...(d.nbiNews || []).slice(0, 2),
-            ].sort((x, y) => mmdd(y.date).localeCompare(mmdd(x.date)));
-            const pubText = (n) => (n.publisher ? ` (${n.publisher})` : '');
-            const newsText = news.length
-                ? news.map((n) => `   [${mmdd(n.date)}] ${n.title}${pubText(n)}${safeUrl(n.linkUrl) ? ' ▶ ' + n.linkUrl : ''}`).join('\n')
-                : '   최근 뉴스 없음';
-            const newsHtml = news.length
-                ? news.map((n) => {
-                    const t = esc(n.title);
-                    const link = safeUrl(n.linkUrl) ? `<a href="${esc(n.linkUrl)}">${t}</a>` : t;
-                    return `<div>[${esc(mmdd(n.date))}] ${link}${esc(pubText(n))}</div>`;
-                }).join('')
-                : '<div>최근 뉴스 없음</div>';
+    h = yf.Ticker(symbol).history(period="10d")["Close"].dropna()
+    return float(h.iloc[-1]), float(h.iloc[-2])
 
-            const ana = [
-                ['회사', a.internal || nd],
-                ['업계 (코스닥 제약/NBI)', a.supply || nd],
-                ['매크로 (코스피/코스닥)', a.macro || nd],
-            ];
 
-            // 첫 줄: 금일 종가 지씨셀 10,100원 (▼ 0.98%), 일거래량 54,444주
-            const st = String(s.marketStatus || '');
-            const label = st.includes('장중') ? '현재가' : (st.includes('금일') ? '금일 종가' : '전 거래일 종가');
-            const pctRaw = String(s.ratio || '');
-            const pctNum = parseFloat(pctRaw);
-            const arrow = Number.isFinite(pctNum) ? (pctNum > 0 ? '▲' : (pctNum < 0 ? '▼' : '')) : '';
-            const head = `${label} 지씨셀 ${s.price || '-'} (${pctRaw ? arrow + pctRaw.replace(/^[+-]/, '') : '-'}), 일거래량 ${s.volume || '-'}`;
+def nbi_index():
+    try:
+        last, prev = yf_pair("^NBI")
+        return {"value": f"{last:,.2f}", "ratio": pct_str((last - prev) / prev * 100)}
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] Yahoo ^NBI 실패 -> Investing.com 으로 대체: {e}", file=sys.stderr)
+        return investing_quote("nasdaq-biotechnology")
 
-            const text =
-`${head}
 
-- 주요 변동요인
-${ana.map(([k, x], i) => `   ${i + 1}. ${k}: ${deltaFmt(x)}`).join('\n')}
+def usd_krw():
+    last, prev = yf_pair("KRW=X")
+    return {"value": f"{last:,.2f}", "change": pct_str((last - prev) / prev * 100)}
 
-- 주요 뉴스
-${newsText}`;
 
-            const html =
-`<div style="font-family:'Malgun Gothic',Arial,sans-serif;font-size:14px;line-height:1.7;color:#111">
-<div><b>${esc(head)}</b></div>
-<div style="margin-top:14px"><b>- 주요 변동요인</b></div>
-<ol style="margin:2px 0 0 0;padding-left:38px">${ana.map(([k, x]) => `<li style="margin-bottom:2px">${esc(k)}: ${deltaFmt(esc(x), (kk, t) => kk === 'up' ? `<span style="color:#d63031">${t}</span>` : (kk === 'down' ? `<span style="color:#2563eb">${t}</span>` : t))}</li>`).join('')}</ol>
-<div style="margin-top:14px"><b>- 주요 뉴스</b></div>
-<div style="margin-left:22px">${newsHtml}</div>
-</div>`;
-            return { text, html };
-        }
+def xbi_index():
+    """SPDR S&P Biotech ETF(XBI): 중소형 바이오 흐름 (미국 전일 장 기준)."""
+    last, prev = yf_pair("XBI")
+    return {"value": f"{last:,.2f}", "ratio": pct_str((last - prev) / prev * 100)}
 
-        // 메일 앱 열기: 일반 텍스트 본문 (뉴스는 한 줄에 제목 + 링크 주소)
-        function sendEmail() {
-            const email = $('recipient-email').value.trim();
-            const subject = $('email-subject').value;
-            const { text } = buildReport();
-            const link = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
-            const tmp = document.createElement('a');
-            tmp.href = link;
-            document.body.appendChild(tmp);
-            tmp.click();
-            document.body.removeChild(tmp);
-            closeEmailModal();
-        }
 
-        // 하이퍼링크 본문 복사: 뉴스 제목에 링크가 걸린 서식 그대로 복사 -> 메일 본문에 붙여넣기(Ctrl+V)
-        async function copyRichEmail() {
-            const { text, html } = buildReport();
-            try {
-                await navigator.clipboard.write([new ClipboardItem({
-                    'text/html': new Blob([html], { type: 'text/html' }),
-                    'text/plain': new Blob([text], { type: 'text/plain' }),
-                })]);
-                alert('복사했습니다. 메일 본문에 붙여넣기(Ctrl+V) 하세요. 뉴스 제목에 링크가 걸려 있습니다.');
-            } catch (e) {
-                alert('복사에 실패했습니다. 브라우저 권한을 확인하거나 "메일 앱 열기"를 사용하세요.');
-            }
-        }
+def us10y():
+    """미국 10년물 국채금리(%). 변동은 %p. (^TNX 가 10배 값으로 오면 보정)"""
+    last, prev = yf_pair("^TNX")
+    if last > 20:
+        last, prev = last / 10, prev / 10
+    return {"value": f"{last:.3f}%", "change": f"{last - prev:+.3f}%p"}
 
-        window.addEventListener('DOMContentLoaded', () => fetchLiveData(false));
-    </script>
-</body>
-</html>
+
+# ---------- DART 공시 (선택: .env 에 DART_API_KEY 가 있을 때만) ----------
+_DART = {"corp": None}
+
+
+def _dart_corp_code(key):
+    if os.environ.get("DART_CORP_CODE"):
+        return os.environ["DART_CORP_CODE"].strip()
+    if _DART["corp"]:
+        return _DART["corp"]
+    import io
+    import zipfile
+
+    r = requests.get("https://opendart.fss.or.kr/api/corpCode.xml", params={"crtfc_key": key}, timeout=20)
+    r.raise_for_status()
+    xml = zipfile.ZipFile(io.BytesIO(r.content)).read("CORPCODE.xml").decode("utf-8", "ignore")
+    for m in re.finditer(r"<list>(.*?)</list>", xml, re.S):
+        blk = m.group(1)
+        sc = re.search(r"<stock_code>\s*(\d+)\s*</stock_code>", blk)
+        if sc and sc.group(1) == CODE:
+            cc = re.search(r"<corp_code>\s*(\d+)\s*</corp_code>", blk)
+            if cc:
+                _DART["corp"] = cc.group(1)
+                return _DART["corp"]
+    raise RuntimeError("DART 고유번호 조회 실패")
+
+
+def dart_disclosures(now, days=7, limit=5):
+    """최근 공시 제목. 키가 없으면 None(미연동), 공시가 없으면 [] ."""
+    key = (os.environ.get("DART_API_KEY") or "").strip()
+    if not key:
+        return None
+    end = now.strftime("%Y%m%d")
+    bgn = (now - timedelta(days=days)).strftime("%Y%m%d")
+    r = requests.get(
+        "https://opendart.fss.or.kr/api/list.json",
+        params={"crtfc_key": key, "corp_code": _dart_corp_code(key), "bgn_de": bgn, "end_de": end,
+                "page_count": 20},
+        timeout=15,
+    )
+    r.raise_for_status()
+    j = r.json()
+    if j.get("status") == "013":  # 조회된 데이터 없음
+        return []
+    if j.get("status") != "000":
+        raise RuntimeError(f"DART 응답 오류 {j.get('status')}")
+    out = []
+    for it in j.get("list", [])[:limit]:
+        d = str(it.get("rcept_dt", ""))
+        out.append({
+            "date": f"{d[4:6]}/{d[6:8]}" if len(d) == 8 else d,
+            "title": str(it.get("report_nm", "")).strip(),
+            "link": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={it.get('rcept_no', '')}",
+        })
+    return out
+
+INVESTING_HOSTS = ("www.investing.com", "uk.investing.com")
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/126.0.0.0 Safari/537.36")
+
+
+def _investing_get(path):
+    hosts = [os.environ["INVESTING_HOST"]] if os.environ.get("INVESTING_HOST") else list(INVESTING_HOSTS)
+    last = "알 수 없음"
+    for host in hosts:
+        try:
+            r = requests.get(
+                f"https://{host}{path}",
+                headers={"User-Agent": _UA, "Accept": "text/html,application/xhtml+xml",
+                         "Accept-Language": "en-US,en;q=0.9"},
+                timeout=12,
+            )
+        except requests.RequestException as e:
+            last = f"{host}: {e.__class__.__name__}"
+            continue
+        if r.status_code == 200 and len(r.text) > 5000:
+            return host, r.text
+        last = f"{host}: HTTP {r.status_code}"
+    raise RuntimeError(f"Investing.com 접속 실패 ({last}) - 봇 차단일 수 있음")
+
+
+def _plain(fragment):
+    fragment = re.sub(r"<!--.*?-->", "", fragment, flags=re.S)
+    return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", fragment))).strip()
+
+
+def parse_investing_quote(html):
+    """종가·등락률을 읽고, 값끼리 맞는지(전일가 대비 계산) 검증한 뒤 반환."""
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+
+    def attr(name):
+        m = re.search(rf'data-test="{name}"[^>]*>(.*?)</', html, re.S)
+        return _plain(m.group(1)) if m else None
+
+    last_s, chg_s, pct_s = attr("instrument-price-last"), attr("instrument-price-change"), attr("instrument-price-change-percent")
+    if not (last_s and chg_s and pct_s):  # 속성 방식 실패 시: 화면 글자에서 '7,463.7 +197.3 (+2.72%)' 모양을 찾음
+        m = re.search(
+            r"([\d,]+(?:\.\d+)?)\s*([+\-\u2212]\s?[\d,]+(?:\.\d+)?)\s*\(\s*([+\-\u2212]?\s?[\d.]+)\s*%\s*\)",
+            _plain(html),
+        )
+        if not m:
+            raise RuntimeError("Investing.com 시세 위치를 찾지 못함 (페이지 구조 변경 가능)")
+        last_s, chg_s, pct_s = m.groups()
+
+    def clean(x):
+        return str(x).replace("\u2212", "-").replace(" ", "").strip("()%")
+
+    last, chg, pct = num(clean(last_s)), num(clean(chg_s)), num(clean(pct_s))
+    if None in (last, chg, pct) or last <= 0:
+        raise RuntimeError("Investing.com 시세 해석 실패")
+    if chg < 0 < pct:
+        pct = -pct
+    prev = last - chg
+    if prev <= 0 or abs(chg / prev * 100 - pct) > 0.06:
+        raise RuntimeError(f"Investing.com 값 검증 실패 (현재 {last}, 변동 {chg}, 등락률 {pct}%)")
+    dec = len(clean(last_s).split(".")[1]) if "." in clean(last_s) else 0
+    return {"value": f"{last:,.{dec}f}", "ratio": pct_str(pct)}
+
+
+def investing_quote(slug):
+    host, html = _investing_get(f"/indices/{slug}")
+    q = parse_investing_quote(html)
+    print(f"Investing.com({host}) {slug}: {q['value']} ({q['ratio']})")
+    return q
+
+_AI_CACHE = {"prompt": None, "out": None, "fail_until": 0.0}
+AI_COOLDOWN = 600  # 429 이후 10분간 AI 호출 중지
+AI_LIVE_INTERVAL = 300  # 장중 AI 재호출 최소 간격(초)
+
+
+def ai_analysis(data):
+    """실제 수집된 데이터만 근거로 3줄 요약. 키/라이브러리가 없으면 None (-> 숫자 기반 자동 문구)."""
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not key:
+        return None
+    from google import genai
+
+    s, m = data["stock"], data["macroIndices"]
+
+    def idx(k):  # 지수는 값·등락률만 전달
+        v = m.get(k) or {}
+        return {"지수": v.get("value"), "등락률": v.get("ratio")} if v else "데이터 없음"
+
+    def pct(x):
+        try:
+            return num(str(x).replace("%", "").replace("−", "-"))
+        except Exception:  # noqa: BLE001
+            return None
+
+    # 상대강도: 지씨셀 등락률 - 지수 등락률 (이미 수집한 숫자로 계산, 해석은 AI 가 하지 않도록 값만 전달)
+    rel = {}
+    me = pct(s.get("ratio"))
+    for label, k in (("코스닥 대비", "kosdaq"), ("코스닥 제약(KQ26) 대비", "kq26")):
+        o = pct((m.get(k) or {}).get("ratio"))
+        if me is not None and o is not None:
+            rel[label] = f"{me - o:+.2f}%p"
+    peers = [{"종목": r.get("name"), "등락률": r.get("ratio")}
+             for r in (data.get("peerTable") or []) if r.get("ratio") not in (None, "-")]
+    fx = m.get("usdKrw") or {}
+    ty = m.get("us10y") or {}
+    disc = s.get("disclosures")
+
+    # 항목별로 근거 데이터를 분리해서 넘긴다 (다른 항목 데이터가 섞여 들어가지 않도록)
+    facts = {
+        "1_회사": {
+            "종가 기준 시세": {k: s.get(k) for k in ("price", "ratio", "volume", "marketStatus")},
+            "주체별 수급(억원, 순매수, 당일/최근5일)": s.get("investor") or "데이터 없음",
+            "최근 7일 공시(DART)": ("최근 7일 공시 없음" if disc == [] else
+                                  [{"date": x["date"], "title": x["title"]} for x in disc]) if disc is not None
+                                 else "데이터 없음",
+            "지수 대비 상대강도(지씨셀 등락률 - 지수 등락률)": rel or "데이터 없음",
+            "녹십자 계열 종목 등락률": peers or "데이터 없음",
+            "지씨셀 기사(제목·날짜·매체)": [
+                {k: n.get(k) for k in ("date", "title", "publisher")} for n in data["companyNews"]
+            ] or "관련 기사 없음",
+        },
+        "2_업계": {
+            "코스닥 제약(KQ26)": idx("kq26"),
+            "나스닥 바이오(NBI, 미국 전일 장 기준)": idx("nbi"),
+            "미국 XBI(중소형 바이오 ETF, 미국 전일 장 기준)": idx("xbi"),
+            "NBI 관련 기사 제목": [n["title"] for n in data["nbiNews"]] or "관련 기사 없음",
+        },
+        "3_매크로": {
+            "코스피": idx("kospi"),
+            "코스닥": idx("kosdaq"),
+            "원/달러 환율": {"환율": fx.get("value"), "전일 대비": fx.get("change")} if fx else "데이터 없음",
+            "미국 10년물 국채금리(미국 전일 장 기준)": {"금리": ty.get("value"), "전일 대비": ty.get("change")} if ty else "데이터 없음",
+            "종가 시황 기사(제목·날짜·매체)": [
+                {k: n.get(k) for k in ("date", "title", "publisher")} for n in (data.get("marketNews") or [])
+            ] or "시황 기사 없음",
+        },
+    }
+    prompt = (
+        "당신은 코스닥 상장사 지씨셀(144510)의 IR 담당자입니다. 경영진·주주에게 매일 공유하는 지씨셀 IR 일일보고의 "
+        "'주가변동 3대 요인'을 간결한 개조식 문체로 작성하세요. 문장은 '~함', '~했음', '~임', '~있었음'처럼 명사형으로 끝맺고 "
+        "'~습니다' 체는 쓰지 않습니다.\n"
+        "문체 예시(숫자·내용은 절대 가져다 쓰지 말고 문체만 참고): "
+        "'당사 금일 종가 OOO원(+O.OO%)으로 거래량 OOO주를 기록함. 외국인 O.O억원 순매수한 반면 기관(O.O억원)은 순매도했음. "
+        "[관련 뉴스 \"OOO 핵심 요약\"] [관련 공시 \"OOO 요약\"]'\n"
+        "뉴스·공시 표기 규칙: 기사나 공시를 언급할 때는 본문 문장으로 풀어 쓰지 말고, 해당 문장 끝에 대괄호로 "
+        "[관련 뉴스 \"기사 제목의 핵심 요약\"] 또는 [관련 공시 \"공시 제목 요약\"] 형식으로만 붙입니다. "
+        "따옴표 안 요약은 제목에 있는 내용만으로 20자 안팎으로 쓰고, 기사·공시가 여러 건이어도 항목당 가장 관련 있는 1건만 씁니다.\n"
+        "작성 기준\n"
+        "1) internal(회사): 종가 기준 주가·등락률과 주체별(외국인·기관·개인) 순매수를 먼저 쓰고, 이어서 수급의 배경으로 볼 수 있는 "
+        "지씨셀 기사의 핵심 내용을 연결해 설명합니다. 회사는 '당사'로 칭하고, 시세의 marketStatus에 '금일 종가'가 있으면 '금일 종가', "
+        "그 외에는 '전 거래일 종가'로 씁니다. 수급은 값이 양수면 '순매수 N억원', 음수면 '순매도 N억원'(부호 없이 절댓값)으로 씁니다. "
+        "기사 제목에 근거가 있는 내용만 쓰고, 기사가 수급과 직접 관련이 있는지 제목만으로 알 수 없으면 '원인이다'라고 단정하지 말고 "
+        "[관련 뉴스 \"~\"] 표기로만 붙입니다. 지수 대비 상대강도가 제공되면 코스닥 대비 강/약을 한 구절로 덧붙이고, "
+        "녹십자 계열 종목 등락률이 제공되면 계열 전반이 같은 방향인지 다른 방향인지만 사실대로 덧붙입니다. "
+        "최근 7일 공시가 제공되면 [관련 공시 \"~\"] 표기로 한 번만 붙이고, 공시 내용·영향은 추정하지 않습니다.\n"
+        "2) supply(업계): 코스닥 제약(KQ26)과 나스닥 바이오(NBI)·XBI의 등락률을 함께 짚어 업계 흐름을 요약하고, "
+        "NBI 기사 제목에 근거가 있으면 [관련 뉴스 \"~\"] 표기로 덧붙입니다. 두 지수의 방향이 다르면 그 점을 그대로 씁니다. "
+        "NBI는 미국 전일 장 기준이므로 '미국 전일 장 기준 NBI'처럼 시차를 밝힙니다.\n"
+        "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 원/달러 환율(값·전일 대비)과 미국 10년물 금리(값·전일 대비, 미국 전일 장 기준)를 덧붙인 뒤, "
+        "종가 시황 기사 제목의 핵심을 [관련 뉴스 \"~\"] 표기로 덧붙입니다. 제공되지 않은 지표는 쓰지 않습니다.\n"
+        "공통 규칙: 각 항목은 1~2문장, 150자 이내. 제공된 숫자와 기사 제목에 있는 내용만 사용하고, 원인 추정·주가 전망·투자의견·"
+        "목표가·임상/실적 등 제공되지 않은 사실은 쓰지 않습니다. 근거 데이터가 없으면 '관련 데이터 없음'이라고만 씁니다. "
+        "숫자는 제공된 값 그대로(등락률은 부호 포함) 쓰고, 과장된 표현·이모지는 쓰지 않습니다.\n"
+        '반드시 JSON 한 개로만 답하세요: {"internal": "...", "supply": "...", "macro": "..."} '
+        '(값 안의 큰따옴표는 반드시 \\" 로 이스케이프)\n\n'
+        + json.dumps(facts, ensure_ascii=False)
+    )
+    # 같은 데이터면 직전 AI 요약을 그대로 쓴다 (새로고침마다 Gemini 를 부르지 않도록)
+    if _AI_CACHE["prompt"] == prompt and _AI_CACHE["out"]:
+        return dict(_AI_CACHE["out"])
+    # 장중에는 시세가 계속 바뀌어 위 캐시가 안 맞으므로, 5분 이내 재호출은 직전 요약을 재사용한다
+    nowk = datetime.now(KST)
+    hm = nowk.hour * 60 + nowk.minute
+    if (MARKET_OPEN <= hm < MARKET_CLOSE and _AI_CACHE["out"]
+            and time.time() - _AI_CACHE.get("ts", 0.0) < AI_LIVE_INTERVAL):
+        return dict(_AI_CACHE["out"])
+    # 한도 초과(429) 직후에는 잠시 호출을 멈춘다
+    if time.time() < _AI_CACHE["fail_until"]:
+        raise RuntimeError("AI 요약 한도 초과로 잠시 중지 중 (자동 문구 사용)")
+    try:
+        client = genai.Client(api_key=key, http_options={"timeout": 60000})
+    except Exception:  # noqa: BLE001
+        client = genai.Client(api_key=key)
+    try:
+        resp = client.models.generate_content(model=os.environ.get("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+            _AI_CACHE["fail_until"] = time.time() + AI_COOLDOWN
+        elif any(k in msg for k in ("504", "DEADLINE", "503", "UNAVAILABLE", "timed out", "Timeout")):
+            _AI_CACHE["fail_until"] = time.time() + 120  # 시간 초과·일시 장애: 2분간 재호출 중지 (새로고침마다 대기 방지)
+        raise
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
+    try:
+        cfgd = json.loads(text)
+    except Exception:  # noqa: BLE001
+        # 본문 안의 [관련 뉴스 "…"] 큰따옴표 때문에 JSON 이 깨진 경우: 키 경계로 직접 분리
+        cfgd = {}
+        mm = re.search(r'"internal"\s*:\s*"(.*?)"\s*,\s*"supply"\s*:\s*"(.*?)"\s*,\s*"macro"\s*:\s*"(.*)"\s*\}?\s*$', text, re.S)
+        if mm:
+            cfgd = {"internal": mm.group(1), "supply": mm.group(2), "macro": mm.group(3)}
+        else:
+            _AI_CACHE["fail_until"] = time.time() + 60  # 형식 오류 반복 시 새로고침마다 재호출 방지
+    d = cfgd
+    out = {k: str(d.get(k, "")).strip().replace('\\"', '"') for k in ("internal", "supply", "macro")}
+    if not all(out.values()):
+        raise RuntimeError("AI 응답 형식 오류")
+    _AI_CACHE["prompt"], _AI_CACHE["out"], _AI_CACHE["ts"] = prompt, dict(out), time.time()
+    return out
+
+
+# ---------- 분석 문구 / HTML / 메일 ----------
+def analysis_block(data):
+    """숫자 기반 자동 문구 (AI 요약을 쓰지 않을 때). 해석·전망 없이 수집된 값만 나열."""
+    st, inv, m = data["stock"], data["stock"].get("investor"), data["macroIndices"]
+
+    def g(k, f="ratio"):
+        return (m.get(k) or {}).get(f, "-")
+
+    ms = st.get("marketStatus") or ""
+    label = "현재가" if "장중" in ms else ("금일 종가" if "금일" in ms else "전 거래일 종가")
+    internal = f"당사 {label} {st['price']}({st['ratio']}), 거래량 {st['volume']}를 기록함."
+    if inv:
+        internal += f" 최근 거래일 순매수는 외국인 {inv['foreign']}, 기관 {inv['organ']}, 개인 {inv['personal']}임."
+    first = (data.get("companyNews") or [{}])[0].get("title")
+    internal += f' [관련 뉴스 "{first}"]' if first else " 최근 관련 기사 없음."
+    dl = st.get("disclosures") or []
+    if dl:
+        internal += f' [관련 공시 "{dl[0].get("title", "")}"]'
+    fx = m.get("usdKrw") or {}
+    return {
+        "internal": internal,
+        "supply": f"코스닥 제약(KQ26) {g('kq26')}, 미국 전일 장 기준 나스닥 바이오(NBI) {g('nbi')}였음.",
+        "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}였음."
+        + (f" 원/달러 {fx.get('value')}원(전일 대비 {fx.get('change')})." if fx.get("value") else "")
+        + (f' [관련 뉴스 "{data["marketNews"][0]["title"]}"]' if data.get("marketNews") else ""),
+    }
+
+
+# ── 종목별 주가·수급 표 (녹십자 계열) ─────────────────────────────
+PEERS_DEFAULT = "녹십자홀딩스:005250,녹십자:006280,녹십자웰빙:234690,녹십자엠에스:142280,지씨지놈:340450,GC메디아이:032620"
+
+
+def peer_list():
+    """.env 의 PEER_STOCKS(이름:코드,이름:코드 ...)로 바꿀 수 있다. 지씨셀(144510)은 항상 맨 위 별도 행."""
+    raw = os.environ.get("PEER_STOCKS") or PEERS_DEFAULT
+    out = []
+    for part in raw.split(","):
+        if ":" in part:
+            n, c = part.rsplit(":", 1)
+            if n.strip() and c.strip().isdigit():
+                out.append((n.strip(), c.strip()))
+    return out
+
+
+def peer_row(kw, now, name, code):
+    ymd = now.strftime("%Y%m%d")
+    q = price_block(kw, now, code)
+    row = {"name": name, "code": code, "price": q["price"], "ratio": q["ratio"], "volume": q["volume"]}
+    try:  # 수급 조회가 실패해도 시세 행은 보여준다
+        inv = investor_block(investor_rows(kw, ymd, code))
+        row["investor"] = {k: inv[k] for k in ("foreign", "organ", "personal")}
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] {name} 수급 실패: {e}", file=sys.stderr)
+    return row
+
+
+def peer_table(kw, now, warnings=None):
+    """종목별로 따로 실패 처리: 한 종목이 실패하면 그 행만 '-' 로 남긴다."""
+    rows = []
+    for name, code in peer_list():
+        try:
+            rows.append(peer_row(kw, now, name, code))
+        except Exception as e:  # noqa: BLE001
+            print(f"[경고] {name}({code}) 조회 실패: {e}", file=sys.stderr)
+            if warnings is not None:
+                warnings.append(f"{name}({code}) 조회 실패: {str(e)[:100]}")
+            rows.append({"name": name, "code": code, "price": "-", "ratio": "-", "volume": "-"})
+    return rows
+
+
+def collect_market(kw, now):
+    """시세·수급·지수를 새로 수집. kw=None 이면 키움 항목은 건너뛰고(시세 '-'), 나머지는 계속 만든다.
+    kw 가 있는데 시세 조회가 실패하면 예외를 던진다 -> 호출부가 토큰을 다시 받아 재시도."""
+    ymd = now.strftime("%Y%m%d")
+    st = price_block(kw, now) if kw is not None else {
+        "price": "-", "ratio": "-", "volume": "-", "marketStatus": "시세 조회 실패"}
+    rows = safe(lambda: investor_rows(kw, ymd), None, "수급(ka10059)") if kw is not None else None
+    inv = safe(lambda: investor_block(rows), None, "수급 집계") if rows else None
+    if inv:
+        st["investor"] = inv
+    st["disclosures"] = safe(lambda: dart_disclosures(now), None, "DART 공시")
+
+    macro = {
+        "nbi": safe(nbi_index, None, "NBI"),
+        "xbi": safe(xbi_index, None, "XBI"),
+        "us10y": safe(us10y, None, "미국 10년물"),
+        "kq26": safe(lambda: kq26_quote(kw), None, "코스닥 제약(KQ26)"),
+        "kospi": safe(lambda: sector_index(kw, "0", "001"), None, "코스피") if kw is not None else None,
+        "kosdaq": safe(lambda: sector_index(kw, "1", "101"), None, "코스닥") if kw is not None else None,
+        "usdKrw": safe(usd_krw, None, "원/달러"),
+    }
+    day = rows[0]["dt"] if rows else ymd
+    return {
+        "tradingDate": f"{day[:4]}-{day[4:6]}-{day[6:]}",
+        "stock": st,
+        "macroIndices": {k: v for k, v in macro.items() if v},
+    }
