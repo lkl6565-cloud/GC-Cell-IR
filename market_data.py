@@ -52,7 +52,9 @@ def pct_str(v):
 
 
 def eok(won):
-    return f"{won / 1e8:+,.1f}억"
+    v = won / 1e8
+    # 1억 미만의 소액은 소수 둘째 자리까지 (0.02억이 '0.0억'으로 사라지지 않게)
+    return f"{v:+,.2f}억" if 0 < abs(v) < 1 else f"{v:+,.1f}억"
 
 
 def tone(s):
