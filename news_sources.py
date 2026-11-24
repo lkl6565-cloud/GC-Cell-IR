@@ -1,7 +1,7 @@
 """뉴스 수집 모듈 (FastAPI 와 무관한 순수 함수 모음)
 
 - 지씨셀 뉴스 : 네이버 API HUB('지씨셀' + '아티바') -> 실패 시 구글 뉴스 RSS
-- NBI 뉴스    : Yahoo Finance(yfinance) -> Investing.com -> 구글 뉴스 RSS
+- NBI 뉴스    : 국문 기사(네이버 API HUB -> 구글 뉴스 RSS), 나스닥 바이오 시황 > NBI 대형주 순
 - 두 목록은 서로 완전히 독립적으로 가져오고, NBI 목록에서 지씨셀 기사와 겹치는 항목은 제거한다.
 - 날짜는 항상 'YYYY-MM-DD'(한국시간) 문자열로 통일한다 (index.html 의 날짜 변환과 호환).
 """
@@ -264,17 +264,72 @@ def investing_news(limit=3):
     raise RuntimeError(f"Investing.com 뉴스 실패 ({last})")
 
 
+# ---------- NBI 국문 뉴스 (네이버 -> 구글, 한국어 기사) ----------
+NBI_KO_QUERIES = ["나스닥 바이오", "미국 바이오주", "美 바이오", "바이오 ETF",
+                  "암젠", "길리어드", "버텍스", "리제네론", "모더나"]
+_NBI_MARKET = re.compile(r"NBI|IBB|XBI|미국\s?바이오|美\s?바이오|바이오\s?ETF", re.I)
+_NASDAQ = re.compile(r"나스닥|NASDAQ", re.I)
+_NBI_NAMES = re.compile(r"암젠|길리어드|버텍스|리제네론|모더나|바이오젠|알닐람|바이오엔테크|인스메드|일루미나|아스트라제네카")
+_NBI_EVENT = re.compile(r"주가|증시|마감|상승|하락|급등|급락|인수|M&A|FDA|임상|승인|실적|매출|매각|매도|매수|가이던스|목표가")
+
+
+def _nbi_tier(title):
+    """1: 나스닥 바이오·미국 바이오 시황, 2: NBI 대형주 + 주가·인수·임상 등 이슈, 3: NBI 대형주 기타, 0: 제외.
+    '암젠코리아' 같은 국내 법인 행사 기사는 제외한다."""
+    t = title or ""
+    if "코리아" in t:
+        return 0
+    if _NBI_MARKET.search(t) or (_NASDAQ.search(t) and "바이오" in t):
+        return 1
+    if _NBI_NAMES.search(t):
+        return 2 if _NBI_EVENT.search(t) else 3
+    return 0
+
+
+def nbi_ko_news(limit=3):
+    """NBI 관련 국문 기사: 시황 기사 우선, 대형주 기사는 회사당 1건씩. 네이버 실패 시 구글 뉴스(한국어)."""
+    try:
+        pool = naver_news(NBI_KO_QUERIES, 60, keep=lambda t: _nbi_tier(t) > 0)
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] NBI 국문 뉴스(네이버) 실패 -> 구글 뉴스로 대체: {e}")
+        pool = []
+        for q in NBI_KO_QUERIES:
+            try:
+                pool += [x for x in google_news(q, 10, 3) if _nbi_tier(x["title"]) > 0]
+            except Exception as ge:  # noqa: BLE001
+                print(f"[경고] 구글 뉴스({q}) 실패: {ge}")
+    out, titles, names = [], set(), set()
+    for tier in (1, 2, 3):
+        cands = sorted((x for x in pool if _nbi_tier(x["title"]) == tier),
+                       key=lambda x: x.get("date", ""), reverse=True)
+        for x in cands:
+            nt = _norm_title(x["title"])
+            m = _NBI_NAMES.search(x["title"])
+            if nt in titles or (tier > 1 and m and m.group(0) in names):
+                continue
+            titles.add(nt)
+            if m:
+                names.add(m.group(0))
+            out.append(x)
+            if len(out) >= limit:
+                return out
+    return out
+
+
 # ---------- NBI 뉴스 (출처 체인 + 지씨셀 목록과 분리) ----------
 def nbi_news(limit=3, exclude=None):
-    """Yahoo -> Investing.com -> Google 순서. exclude(지씨셀 기사 목록)와 겹치는 기사는 제외한다."""
+    """기본: 국문 기사(네이버 -> 구글). NBI_NEWS_ORDER 로 yahoo·investing(영문) 순서를 바꿀 수 있다.
+    exclude(지씨셀 기사 목록)와 겹치는 기사는 제외한다."""
     ex_titles = {_norm_title(x.get("title")) for x in (exclude or [])}
     ex_links = {x.get("linkUrl") for x in (exclude or [])}
     sources = {
+        "korean": ("국문(네이버/구글)", lambda: nbi_ko_news(limit + 3)),
         "yahoo": ("Yahoo Finance", lambda: yahoo_news(limit + 3)),
         "investing": ("Investing.com", lambda: investing_news(limit + 3)),
-        "google": ("Google News", lambda: google_news("암젠 OR 길리어드 OR 버텍스 OR 리제네론 OR 나스닥바이오", limit + 3, 3)),
     }
-    order = [x.strip() for x in (os.getenv("NBI_NEWS_ORDER") or "yahoo,investing,google").split(",") if x.strip() in sources]
+    order = [x.strip() for x in (os.getenv("NBI_NEWS_ORDER") or "korean").split(",") if x.strip() in sources]
+    if "korean" not in order:  # 예전 .env 설정(yahoo,investing,google)이 남아 있어도 국문 기사를 먼저 쓴다
+        order.insert(0, "korean")
     out, titles = [], set()
     for key in order:
         label, fn = sources[key]
