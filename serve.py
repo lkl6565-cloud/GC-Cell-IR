@@ -19,6 +19,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 import market_data as md
 import news_sources as ns
 import law_sources as ls
+import kiwoom_proxy as kp
+from starlette.concurrency import run_in_threadpool
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=BASE_DIR / ".env", override=True)
@@ -224,6 +226,28 @@ def api_law_article(law: str = "", jo: str = "", keyword: str = "", target: str 
         return JSONResponse(content={"error": str(e)}, status_code=404)
     except Exception as e:  # noqa: BLE001
         return JSONResponse(content={"error": str(e)[:200]}, status_code=502)
+
+
+# ---------------------------------------------------------------------------
+# 키움 조회 전용 중계 (주문·계좌 차단, kiwoom_proxy.py / kiwoom_api.md 참고)
+# ---------------------------------------------------------------------------
+@app.post("/api/kiwoom")
+async def api_kiwoom(request: Request):
+    if not kp.check_token(request.headers.get("x-proxy-token")):
+        return JSONResponse(content={"error": "X-Proxy-Token 불일치"}, status_code=403)
+    try:
+        p = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse(content={"error": "JSON 본문 필요"}, status_code=400)
+    try:
+        res = await run_in_threadpool(
+            kp.call, _kiwoom, _reset_kiwoom, str(p.get("group", "dostk")), str(p.get("category", "")),
+            str(p.get("api_id", "")), p.get("body") or {}, str(p.get("cont_yn", "N")), str(p.get("next_key", "")))
+        return JSONResponse(content=res)
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"error": str(e)[:300]}, status_code=502)
 
 
 @app.get("/law")
