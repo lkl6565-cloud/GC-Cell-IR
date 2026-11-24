@@ -129,6 +129,7 @@ def build_payload():
     nbi_news = _safe(lambda: ns.nbi_news(3, exclude=company_news), [], "NBI 뉴스", warnings)
 
     market_news = _safe(ns.market_news, [], "시황 뉴스", warnings)
+    us_market_news = _safe(ns.us_market_news, [], "뉴욕증시 시황 뉴스", warnings)
     peers = _safe(lambda: _peers(now, warnings), [], "종목별 주가·수급", warnings)
 
     data = {
@@ -139,6 +140,7 @@ def build_payload():
         "companyNews": company_news,
         "nbiNews": nbi_news,
         "marketNews": market_news,
+        "usMarketNews": us_market_news,
         "peerTable": peers,
         "macroIndices": market["macroIndices"],
     }

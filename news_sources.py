@@ -2,6 +2,7 @@
 
 - 지씨셀 뉴스 : 네이버 API HUB('지씨셀' + '아티바') -> 실패 시 구글 뉴스 RSS
 - NBI 뉴스    : 국문 기사(네이버 API HUB -> 구글 뉴스 RSS), 나스닥 바이오 시황 > NBI 대형주 순
+- 마감시황  : 국내(코스피·코스닥 마감), 미국(뉴욕증시 마감) 각 1건씩 뉴스 카드 맨 아래에 붙인다
 - 두 목록은 서로 완전히 독립적으로 가져오고, NBI 목록에서 지씨셀 기사와 겹치는 항목은 제거한다.
 - 날짜는 항상 'YYYY-MM-DD'(한국시간) 문자열로 통일한다 (index.html 의 날짜 변환과 호환).
 """
@@ -68,8 +69,8 @@ def google_news(query, limit=3, days=2):
 
 
 # ---------- 네이버 API HUB (지씨셀 뉴스) ----------
-COMPANY_QUERIES = ["지씨셀", "GC셀", "아티바", "Artiva", "gccell", "144510"]
-_COMPANY_KEYS = ("지씨셀", "gc셀", "gccell", "gc cell", "아티바", "artiva", "144510")
+COMPANY_QUERIES = ["지씨셀", "GC셀", "아티바", "Artiva", "gccell", "144510", "녹십자"]
+_COMPANY_KEYS = ("지씨셀", "gc셀", "gccell", "gc cell", "아티바", "artiva", "144510", "녹십자")
 
 
 def _is_company(title):
@@ -111,7 +112,7 @@ def naver_news(queries, limit=3, keep=None):
 
 
 def company_news(limit=3):
-    """지씨셀 뉴스: 지씨셀·GC셀·아티바·Artiva·gccell·144510 키워드, 제목에 키워드가 있는 기사만.
+    """지씨셀 뉴스: 지씨셀·GC셀·아티바·Artiva·gccell·144510·녹십자 키워드, 제목에 키워드가 있는 기사만.
     네이버 실패 시 구글. 키워드가 제목에 든 기사가 하나도 없으면 필터 없이 검색 결과를 그대로 쓴다."""
     try:
         items = naver_news(COMPANY_QUERIES, limit, keep=_is_company)
@@ -126,15 +127,37 @@ def company_news(limit=3):
     return [x for x in g if _is_company(x.get("title"))][:limit] or g[:limit]
 
 
+_KR_CLOSE = re.compile(r"(코스피|코스닥).*마감|마감.*(코스피|코스닥)|마감\s?시황")
+_US_CLOSE = re.compile(r"뉴욕\s?증시|뉴욕\s?마감|(美|미국)\s?증시.*마감|다우.*나스닥|나스닥.*다우|S&P\s?500.*(마감|상승|하락)")
+_US_EXCLUDE = re.compile(r"코스피|코스닥|삼성|하이닉스|국내|국장|원·달러|원/달러")
+
+
 def market_news(limit=3):
-    """종가 기준 시황 뉴스: '코스피 마감' / '코스닥 마감' 기사. 네이버 실패 시 구글 뉴스로 대체."""
+    """국내 마감시황: '코스피 마감' / '코스닥 마감' 기사 (제목에 코스피·코스닥+마감). 네이버 실패 시 구글 뉴스."""
     try:
-        items = naver_news(["코스피 마감", "코스닥 마감"], limit)
+        items = naver_news(["코스닥 마감", "코스피 마감", "마감시황"], limit, keep=lambda t: bool(_KR_CLOSE.search(t)))
         if items:
             return items
     except Exception as e:  # noqa: BLE001
         print(f"[경고] 네이버 시황 뉴스 실패 -> 구글 뉴스로 대체: {e}")
-    return google_news("코스피 코스닥 마감 시황", limit, 2)
+    g = google_news("코스피 코스닥 마감 시황", limit * 3, 2)
+    return [x for x in g if _KR_CLOSE.search(x["title"])][:limit] or g[:limit]
+
+
+def _is_us_close(title):
+    return bool(_US_CLOSE.search(title or "")) and not _US_EXCLUDE.search(title or "")
+
+
+def us_market_news(limit=3):
+    """뉴욕증시 마감시황 국문 기사 (제목에 뉴욕증시·나스닥·다우 등 + 마감·상승·하락). 네이버 실패 시 구글 뉴스."""
+    try:
+        items = naver_news(["뉴욕증시 마감", "뉴욕증시", "美증시 마감"], limit, keep=_is_us_close)
+        if items:
+            return items
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] 네이버 뉴욕증시 뉴스 실패 -> 구글 뉴스로 대체: {e}")
+    g = google_news("뉴욕증시 마감", limit * 3, 2)
+    return [x for x in g if _is_us_close(x["title"])][:limit]
 
 
 # ---------- Yahoo Finance (yfinance) ----------

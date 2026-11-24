@@ -121,8 +121,8 @@
 
                 <div class="pt-3 border-t border-zinc-800/80 space-y-2.5">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">주요 이슈 (당사 키워드 피드 3선)</h3>
-                        <span class="text-[9px] text-emerald-400 font-mono">지씨셀 · 아티바</span>
+                        <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">주요 이슈 (당사 키워드 피드 3선 + 마감시황)</h3>
+                        <span class="text-[9px] text-emerald-400 font-mono">지씨셀 · 아티바 · 녹십자</span>
                     </div>
                     <div id="company-news-container" class="space-y-1.5 text-xs">
                         <div class="bg-zinc-950/40 p-2.5 rounded-xl border border-zinc-800/60 text-zinc-400 text-center animate-pulse text-[11px]">뉴스 불러오는 중...</div>
@@ -172,7 +172,7 @@
 
                 <div class="pt-3 border-t border-zinc-800/80 space-y-2.5">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">NBI 포함 주요 종목 뉴스 (3선)</h3>
+                        <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">NBI 포함 주요 종목 뉴스 (3선 + 뉴욕증시 마감시황)</h3>
                         <span class="text-[9px] text-blue-400 font-mono">NBI 구성</span>
                     </div>
                     <div id="nbi-news-container" class="space-y-1.5 text-xs">
@@ -429,7 +429,7 @@
             });
         }
 
-        function renderNews(containerId, items, badgeColor) {
+        function renderNews(containerId, items, badgeColor, closeItem) {
             const box = $(containerId);
             if (!box) return;
             
@@ -445,7 +445,9 @@
             }
 
             box.replaceChildren();
-            targetItems.slice(0, 3).forEach((item) => {
+            const rows = targetItems.slice(0, 3).map((item) => ({ item, tag: null }));
+            if (closeItem && closeItem.title) rows.push({ item: closeItem, tag: '시황' });
+            rows.forEach(({ item, tag }) => {
                 const card = document.createElement('div');
                 card.className = 'bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 hover:border-zinc-700 transition-all';
                 const row = document.createElement('div');
@@ -455,7 +457,8 @@
                 badge.className = `px-1.5 py-0.5 text-[9px] bg-zinc-800 ${badgeColor} font-mono rounded shrink-0`;
                 
                 const formattedDate = formatDateToMMDD(item.date);
-                badge.textContent = `[${formattedDate}]`;
+                badge.textContent = tag ? `[${formattedDate} ${tag}]` : `[${formattedDate}]`;
+                if (tag) badge.className = `px-1.5 py-0.5 text-[9px] bg-amber-500/15 text-amber-300 font-mono rounded shrink-0`;
 
                 const a = document.createElement('a');
                 a.href = safeUrl(item.linkUrl || item.url);
@@ -534,7 +537,9 @@
                             ratio: (newData.stock && newData.stock.ratio) ? newData.stock.ratio : (store.stock ? store.stock.ratio : '+2.80%'),
                         },
                         companyNews: (newData.companyNews && newData.companyNews.length > 0) ? newData.companyNews : (store.companyNews || []),
-                        nbiNews: (newData.nbiNews && newData.nbiNews.length > 0) ? newData.nbiNews : (store.nbiNews || [])
+                        nbiNews: (newData.nbiNews && newData.nbiNews.length > 0) ? newData.nbiNews : (store.nbiNews || []),
+                        marketNews: (newData.marketNews && newData.marketNews.length > 0) ? newData.marketNews : (store.marketNews || []),
+                        usMarketNews: (newData.usMarketNews && newData.usMarketNews.length > 0) ? newData.usMarketNews : (store.usMarketNews || [])
                     };
                 }
                 render(store);
@@ -587,8 +592,8 @@
                 setTone('inv-personal-5d', f5.personal, inv5Base);
             }
 
-            renderNews('company-news-container', d.companyNews, 'text-emerald-400');
-            renderNews('nbi-news-container', d.nbiNews, 'text-blue-400');
+            renderNews('company-news-container', d.companyNews, 'text-emerald-400', (d.marketNews || [])[0]);
+            renderNews('nbi-news-container', d.nbiNews, 'text-blue-400', (d.usMarketNews || [])[0]);
             renderPeers(d);
 
             const m = d.macroIndices || {};
@@ -647,7 +652,7 @@
             const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
             const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '');
 
-            // 뉴스: 최근 공시(DART) + 지씨셀 뉴스(최대 3건) + 종가 시황 1건 + NBI 뉴스(최대 2건) -> 날짜 최신순, 1건 = 1줄
+            // 뉴스: 최근 공시(DART) + 지씨셀 뉴스(최대 3건) + 국내 마감시황 1건 + NBI 뉴스(최대 2건) + 뉴욕증시 마감시황 1건 -> 날짜 최신순, 1건 = 1줄
             // 형식: [11/16] 제목 (언론사)   (공시는 언론사·링크 없이 제목만)
             const mmdd = (x) => formatDateToMMDD(x);
             const news = [
@@ -655,6 +660,7 @@
                 ...(d.companyNews || []).slice(0, 3),
                 ...(d.marketNews || []).slice(0, 1),
                 ...(d.nbiNews || []).slice(0, 2),
+                ...(d.usMarketNews || []).slice(0, 1),
             ].sort((x, y) => mmdd(y.date).localeCompare(mmdd(x.date)));
             const pubText = (n) => (n.publisher ? ` (${n.publisher})` : '');
             const newsText = news.length
