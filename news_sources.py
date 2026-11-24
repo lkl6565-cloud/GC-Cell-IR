@@ -111,6 +111,38 @@ def naver_news(queries, limit=3, keep=None):
     return [x[1] for x in _newest(out)[:limit]]
 
 
+def naver_search(query, display=10, sort="date"):
+    """네이버 뉴스 검색 원본 결과 (필터 없음). 대화·분석용 중계(/api/naver/news)에서 사용."""
+    kid = os.getenv("X-NCP-APIGW-API-KEY-ID") or os.getenv("NAVER_CLIENT_ID")
+    key = os.getenv("X-NCP-APIGW-API-KEY") or os.getenv("NAVER_CLIENT_SECRET")
+    if not kid or not key:
+        raise RuntimeError("네이버 API HUB 키 미설정")
+    r = requests.get(
+        "https://naverapihub.apigw.ntruss.com/search/v1/news",
+        headers={"X-NCP-APIGW-API-KEY-ID": kid.strip(), "X-NCP-APIGW-API-KEY": key.strip()},
+        params={"query": query, "display": display, "start": 1, "sort": sort, "format": "json"},
+        timeout=8,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"네이버 뉴스 API 실패(HTTP {r.status_code})")
+    out = []
+    for it in r.json().get("items", []):
+        try:
+            dt = parsedate_to_datetime(it["pubDate"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
+        except Exception:  # noqa: BLE001
+            dt = ""
+        orig = it.get("originallink") or ""
+        out.append({
+            "date": dt,
+            "title": unescape(re.sub(r"<[^>]+>", "", it.get("title", ""))).strip(),
+            "summary": unescape(re.sub(r"<[^>]+>", "", it.get("description", ""))).strip(),
+            "publisher": urlparse(orig or it.get("link", "")).netloc.removeprefix("www."),
+            "link": it.get("link", ""),
+            "originallink": orig,
+        })
+    return out
+
+
 def company_news(limit=3):
     """지씨셀 뉴스: 지씨셀·GC셀·아티바·Artiva·gccell·144510·녹십자 키워드, 제목에 키워드가 있는 기사만.
     네이버 실패 시 구글. 키워드가 제목에 든 기사가 하나도 없으면 필터 없이 검색 결과를 그대로 쓴다."""

@@ -250,6 +250,42 @@ async def api_kiwoom(request: Request):
         return JSONResponse(content={"error": str(e)[:300]}, status_code=502)
 
 
+# ---------------------------------------------------------------------------
+# 네이버 뉴스 검색 중계 (조회 전용, 60초 캐시, 초당 2건 제한)
+# ---------------------------------------------------------------------------
+_naver_cache = {}
+_naver_lock = threading.Lock()
+_naver_last = [0.0]
+
+
+@app.get("/api/naver/news")
+def api_naver_news(q: str, display: int = 10, sort: str = "date"):
+    q = (q or "").strip()[:100]
+    if not q:
+        return JSONResponse(content={"error": "q(검색어) 필요"}, status_code=400)
+    display = max(1, min(int(display), 100))
+    sort = "sim" if sort == "sim" else "date"
+    key = (q, display, sort)
+    with _naver_lock:
+        hit = _naver_cache.get(key)
+        if hit and time.time() - hit[0] < 60:
+            return JSONResponse(content=hit[1])
+        wait = _naver_last[0] + 0.5 - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _naver_last[0] = time.time()
+    try:
+        items = ns.naver_search(q, display, sort)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"error": str(e)[:200]}, status_code=502)
+    res = {"query": q, "sort": sort, "count": len(items), "items": items}
+    with _naver_lock:
+        if len(_naver_cache) > 200:
+            _naver_cache.clear()
+        _naver_cache[key] = (time.time(), res)
+    return JSONResponse(content=res)
+
+
 @app.get("/law")
 @app.get("/law.html")
 def law_page():
