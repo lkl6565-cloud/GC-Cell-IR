@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 import market_data as md
 import news_sources as ns
+import law_sources as ls
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=BASE_DIR / ".env", override=True)
@@ -194,6 +195,39 @@ def api_refresh():
 @app.get("/data.json")
 def api_data():
     return JSONResponse(content=get_payload(force=False))
+
+
+# ---------------------------------------------------------------------------
+# 법령 조회 (국가법령정보센터 Open API, LAW_OC 필요)
+# ---------------------------------------------------------------------------
+@app.get("/api/law/presets")
+def api_law_presets():
+    return JSONResponse(content=ls.PRESETS)
+
+
+@app.get("/api/law/search")
+def api_law_search(q: str, target: str = "law"):
+    try:
+        return JSONResponse(content=ls.search(q, "admrul" if target == "admrul" else "law"))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"error": str(e)[:200]}, status_code=502)
+
+
+@app.get("/api/law/article")
+def api_law_article(law: str = "", jo: str = "", keyword: str = "", target: str = "", id: str = ""):
+    try:
+        return JSONResponse(content=ls.article(law, jo=jo or None, target=target or None,
+                                               id_=id or None, keyword=keyword or None))
+    except (LookupError, ValueError) as e:
+        return JSONResponse(content={"error": str(e)}, status_code=404)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(content={"error": str(e)[:200]}, status_code=502)
+
+
+@app.get("/law")
+@app.get("/law.html")
+def law_page():
+    return FileResponse(BASE_DIR / "law.html")
 
 
 @app.get("/healthz")
