@@ -182,6 +182,11 @@
                                     <td id="kq26-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
                                     <td id="kq26-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
                                 </tr>
+                                <tr>
+                                    <td class="py-2.5 px-2.5 font-sans font-medium text-white">KRX 헬스케어</td>
+                                    <td id="krxhc-val" class="py-2.5 px-2.5 text-right font-bold text-white">-</td>
+                                    <td id="krxhc-ratio" class="py-2.5 px-2.5 text-right font-bold text-zinc-400">-</td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
@@ -677,6 +682,7 @@
             if (m.nbi) { setText('nbi-val', m.nbi.value); setTone('nbi-ratio', m.nbi.ratio, idxBase); }
             if (m.xbi) { setText('xbi-val', m.xbi.value); setTone('xbi-ratio', m.xbi.ratio, idxBase); }
             if (m.kq26) { setText('kq26-val', m.kq26.value); setTone('kq26-ratio', m.kq26.ratio, idxBase); }
+            if (m.krxHc) { setText('krxhc-val', m.krxHc.value); setTone('krxhc-ratio', m.krxHc.ratio, idxBase); }
             if (m.kospi) { setText('macro-kospi-val', m.kospi.value); setTone('macro-kospi-ratio', m.kospi.ratio, macBase); }
             if (m.kosdaq) { setText('macro-kosdaq-val', m.kosdaq.value); setTone('macro-kosdaq-ratio', m.kosdaq.ratio, macBase); }
             if (m.us10y) { setText('macro-us10y-val', m.us10y.value); setTone('macro-us10y-ratio', m.us10y.change || m.us10y.ratio, macBase); }

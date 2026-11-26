@@ -307,6 +307,39 @@ def kq26_quote(kw):
     return investing_quote("kosdaq-pharmaceuticals")
 
 
+# KRX 헬스케어: 키움 통합지수(KRX) 업종 목록에서 이름으로 코드를 찾아 조회 (코스닥 제약과 같은 ka20001 방식)
+_KRX_HC = {}
+
+
+def _krx_hc_target(kw):
+    """(mrkt_tp, 업종코드, 업종명). .env 의 KRX_HC_MRKT/KRX_HC_CODE 가 있으면 그 값을 그대로 쓴다."""
+    if os.environ.get("KRX_HC_CODE"):
+        return os.environ.get("KRX_HC_MRKT") or "7", os.environ["KRX_HC_CODE"], None
+    if _KRX_HC.get("code"):
+        return _KRX_HC["mrkt"], _KRX_HC["code"], _KRX_HC["name"]
+    for mrkt in ("7", "0", "2"):  # 7: 통합지수(KRX) 우선
+        names = safe(lambda: sector_names(kw, mrkt), {}, f"업종코드 목록(ka10101 mrkt_tp={mrkt})")
+        cands = [(c, n) for c, n in names.items()
+                 if "헬스케어" in n and not any(x in n for x in ("200", "300", "150", "코스피", "코스닥"))]
+        if cands:
+            code, name = next(((c, n) for c, n in cands if n.replace(" ", "") == "KRX헬스케어"), cands[0])
+            _KRX_HC.update(mrkt=mrkt, code=code, name=name)
+            print(f"KRX 헬스케어 업종코드: mrkt_tp={mrkt}, {code} ({name})")
+            return mrkt, code, name
+    raise RuntimeError("키움 업종 목록에서 'KRX 헬스케어'를 찾지 못함 (.env 에 KRX_HC_MRKT·KRX_HC_CODE 지정 가능)")
+
+
+def krx_healthcare_quote(kw):
+    """KRX 헬스케어: 키움 우선, 실패하거나 키움 연결이 없으면 Investing.com (코스닥 제약과 동일한 방식)."""
+    if kw is not None:
+        try:
+            mrkt, code, _ = _krx_hc_target(kw)
+            return sector_index(kw, mrkt, code)
+        except Exception as e:  # noqa: BLE001
+            print(f"[경고] 키움 KRX 헬스케어 실패 -> Investing.com 으로 대체: {e}", file=sys.stderr)
+    return investing_quote(os.environ.get("KRX_HC_INVESTING_SLUG") or "krx-health-care")
+
+
 def yf_pair(symbol):
     import yfinance as yf
 
@@ -694,6 +727,7 @@ def collect_market(kw, now):
         "xbi": safe(xbi_index, None, "XBI"),
         "us10y": safe(us10y, None, "미국 10년물"),
         "kq26": safe(lambda: kq26_quote(kw), None, "코스닥 제약(KQ26)"),
+        "krxHc": safe(lambda: krx_healthcare_quote(kw), None, "KRX 헬스케어"),
         "kospi": safe(lambda: sector_index(kw, "0", "001"), None, "코스피") if kw is not None else None,
         "kosdaq": safe(lambda: sector_index(kw, "1", "101"), None, "코스닥") if kw is not None else None,
         "usdKrw": safe(usd_krw, None, "원/달러"),
