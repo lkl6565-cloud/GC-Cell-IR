@@ -180,6 +180,21 @@ def _bar_quote(rows, i, status, kw=None, code=CODE):
     }
 
 
+def _with_avg(q, rows, i):
+    """i번째 일봉 기준 직전 20거래일 평균 거래량과 배수를 붙인다 (요약 각주용). 실패해도 시세는 그대로."""
+    try:
+        past = [abs(num(r.get("trde_qty")) or 0) for r in rows[i + 1:i + 21]]
+        past = [v for v in past if v > 0]
+        vol = num(str(q.get("volume", "")).replace("주", ""))
+        if len(past) >= 5 and vol is not None:
+            avg = sum(past) / len(past)
+            q["avgVolume20"] = f"{avg:,.0f}주"
+            q["volumeRatio"] = round(abs(vol) / avg, 1) if avg else None
+    except Exception as e:  # noqa: BLE001
+        print(f"[경고] 20일 평균 거래량 계산 실패: {e}")
+    return q
+
+
 MARKET_OPEN, MARKET_CLOSE = 9 * 60, 15 * 60 + 30  # 한국시간 09:00 / 15:30 (분 단위)
 
 
@@ -195,16 +210,17 @@ def price_block(kw, now, code=CODE):
     today_bar = rows[0]["dt"] == ymd
 
     if hm < MARKET_OPEN:
-        return _bar_quote(rows, 1 if today_bar else 0, "전일 종가 (장 시작 전)")
+        i = 1 if today_bar else 0
+        return _with_avg(_bar_quote(rows, i, "전일 종가 (장 시작 전)"), rows, i)
     if hm < MARKET_CLOSE:
         if today_bar or hm < MARKET_OPEN + 5:  # 개장 직후 몇 분은 일봉 생성 전일 수 있음
             st = stock_block(kw, code)
             st["marketStatus"] = "장중 (실시간)"
-            return st
-        return _bar_quote(rows, 0, "전 거래일 종가 (휴장)", kw, code)
+            return _with_avg(st, rows, 0 if today_bar else -1)
+        return _with_avg(_bar_quote(rows, 0, "전 거래일 종가 (휴장)", kw, code), rows, 0)
     if today_bar:
-        return _bar_quote(rows, 0, "금일 종가 (정규장 마감)", kw, code)
-    return _bar_quote(rows, 0, "전 거래일 종가 (휴장 또는 집계 지연)", kw, code)
+        return _with_avg(_bar_quote(rows, 0, "금일 종가 (정규장 마감)", kw, code), rows, 0)
+    return _with_avg(_bar_quote(rows, 0, "전 거래일 종가 (휴장 또는 집계 지연)", kw, code), rows, 0)
 
 
 def investor_rows(kw, ymd, code=CODE):
