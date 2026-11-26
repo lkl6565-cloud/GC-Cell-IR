@@ -54,6 +54,23 @@
 
     <main class="max-w-4xl mx-auto px-4 mt-6 space-y-5">
 
+        <!-- 0. 주가 동향 요약 (맨 상단 각주) -->
+        <section id="summary-box" class="bg-zinc-900/80 border border-emerald-500/30 rounded-2xl p-5 space-y-3 shadow-xl backdrop-blur-sm">
+            <div class="flex items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                <h2 id="summary-title" class="text-sm font-bold text-white flex items-center gap-1.5">
+                    <i data-lucide="file-text" class="w-4 h-4 text-emerald-400"></i> 당사 주가 동향 요약
+                </h2>
+                <span id="summary-flag" class="hidden text-[10px] px-2 py-0.5 bg-rose-950/60 text-rose-400 border border-rose-800/50 rounded font-mono">[긴급] 보고 검토</span>
+            </div>
+            <ul id="summary-list" class="space-y-1.5 text-[12px] text-zinc-200 leading-relaxed list-none">
+                <li class="text-zinc-500">데이터 동기화 대기 중...</li>
+            </ul>
+            <p id="summary-judge" class="text-[12px] text-zinc-300 leading-relaxed"></p>
+            <p id="summary-note" class="text-[10px] text-zinc-500 pt-2 border-t border-zinc-800/60 leading-relaxed">
+                * 정규장(KRX) 종가 기준. 상대수익률 = 당사 등락률 − 코스닥 제약(KQ26) 등락률. 해석은 참고용이며 원인을 단정하지 않음.
+            </p>
+        </section>
+
         <!-- Top Action Banner -->
         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-900/90 border border-zinc-800/80 p-4 rounded-2xl shadow-xl">
             <div class="space-y-1">
@@ -429,6 +446,63 @@
             });
         }
 
+        // ---------- 0. 맨 상단 주가 동향 요약 (보고서 양식: 현황 → 회사/시장 요인 판단) ----------
+        const pnum = (x) => { const v = parseFloat(String(x ?? '').replace(/[,%억원주\s]/g, '')); return Number.isFinite(v) ? v : null; };
+        const arrowPct = (r) => { const v = pnum(r); if (v === null) return '-'; return v > 0 ? `+${Math.abs(v).toFixed(2)}%` : (v < 0 ? `-${Math.abs(v).toFixed(2)}%` : '0.00%'); };
+
+        function renderSummary(d) {
+            const list = $('summary-list');
+            if (!list) return;
+            const s = d.stock || {}, m = d.macroIndices || {}, inv = s.investor || {};
+            const esc1 = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            const color = (t) => deltaFmt(esc1(t), (k, x) => k === 'up' ? `<span style="color:#f43f5e;font-weight:600">${x}</span>` : (k === 'down' ? `<span style="color:#38bdf8;font-weight:600">${x}</span>` : x));
+
+            const dm = String(d.tradingDate || '').match(/^\d{4}-(\d{2})-(\d{2})/);
+            const mmddDay = dm ? `${dm[1]}/${dm[2]}` : '';
+            const title = $('summary-title');
+            if (title) title.innerHTML = `<i data-lucide="file-text" class="w-4 h-4 text-emerald-400"></i> [지씨셀] ${esc1(mmddDay)} 당사 주가 동향 요약`;
+
+            const st = String(s.marketStatus || '');
+            const label = st.includes('장중') ? '현재가' : (st.includes('금일') ? '금일 종가' : '전 거래일 종가');
+            const pct = pnum(s.ratio), vr = typeof s.volumeRatio === 'number' ? s.volumeRatio : null;
+            const idx = (name, o) => o ? `${name} ${o.value}(${arrowPct(o.ratio)})` : `${name} -`;
+
+            const lines = [
+                `당사 ${label} ${s.price || '-'}(${arrowPct(s.ratio)}), 거래량 ${s.volume || '-'}${vr !== null ? `(20일 평균 대비 ${vr.toFixed(1)}배)` : ''}`,
+                inv.foreign !== undefined ? `수급: 외국인 ${inv.foreign} / 기관 ${inv.organ} / 개인 ${inv.personal}` : '수급: 데이터 없음',
+                `${idx('코스닥 제약', m.kq26)}, ${idx('NBI', m.nbi)}`,
+                `${idx('코스닥', m.kosdaq)}, ${idx('코스피', m.kospi)}`,
+            ];
+            list.innerHTML = lines.map((t) => `<li>- ${color(t)}</li>`).join('');
+
+            // 판단: 업종 대비 상대수익률 · 주도 수급 · 거래량 · 당사 재료 유무
+            const judge = [];
+            const kq = m.kq26 ? pnum(m.kq26.ratio) : null;
+            if (pct !== null && kq !== null) {
+                const rel = pct - kq;
+                const relTxt = `${rel >= 0 ? '+' : '-'}${Math.abs(rel).toFixed(2)}%p`;
+                if (Math.abs(rel) <= 1) {
+                    judge.push(`코스닥 제약 대비 ${relTxt}로 업종 흐름에 동조한 것으로 보임`);
+                } else {
+                    const who = [['외국인', inv.foreign], ['기관', inv.organ], ['개인', inv.personal]]
+                        .map(([k, v]) => [k, pnum(v)]).filter(([, v]) => v !== null && v !== 0)
+                        .sort((a, b) => (pct >= 0 ? b[1] - a[1] : a[1] - b[1]))[0];
+                    const whoTxt = who && (pct >= 0 ? who[1] > 0 : who[1] < 0) ? `${who[0]} 순${who[1] > 0 ? '매수' : '매도'} 등 ` : '';
+                    judge.push(`코스닥 제약 대비 ${relTxt}로 ${whoTxt}개별 수급 요인이 작용한 것으로 보임`);
+                }
+            }
+            if (vr !== null && vr >= 2) judge.push(`거래량 급증(20일 평균 대비 ${vr.toFixed(1)}배)`);
+            const hasNews = mmddDay && (d.companyNews || []).some((n) => formatDateToMMDD(n.date) === mmddDay);
+            const hasDisc = mmddDay && (s.disclosures || []).some((n) => formatDateToMMDD(n.date) === mmddDay);
+            if (mmddDay && !hasNews && !hasDisc) judge.push('당사 관련 특이 재료는 확인되지 않음');
+            const jEl = $('summary-judge');
+            if (jEl) jEl.innerHTML = judge.length ? `<span class="text-emerald-400 font-semibold">▶ 판단</span> ${color(judge.join(', '))}` : '';
+
+            const flag = $('summary-flag');
+            if (flag) flag.classList.toggle('hidden', !((pct !== null && Math.abs(pct) >= 5) || (vr !== null && vr >= 3)));
+            lucide.createIcons();
+        }
+
         function renderNews(containerId, items, badgeColor, closeItem) {
             const box = $(containerId);
             if (!box) return;
@@ -595,6 +669,7 @@
             renderNews('company-news-container', d.companyNews, 'text-emerald-400', (d.marketNews || [])[0]);
             renderNews('nbi-news-container', d.nbiNews, 'text-blue-400', (d.usMarketNews || [])[0]);
             renderPeers(d);
+            renderSummary(d);
 
             const m = d.macroIndices || {};
             const idxBase = 'py-2.5 px-2.5 text-right font-bold';
