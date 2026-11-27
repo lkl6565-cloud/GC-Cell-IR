@@ -9,6 +9,7 @@ import hmac
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -124,15 +125,21 @@ def build_payload():
     """시세·뉴스를 새로 수집한다. 한 항목이 실패해도 나머지는 계속 만든다."""
     now = datetime.now(KST)
     warnings = []
-    market = _market(now, warnings)
 
-    # 지씨셀 뉴스와 NBI 뉴스는 서로 다른 함수로 따로 가져오고, NBI 쪽에서 지씨셀 기사와 겹치면 제거한다
-    company_news = _safe(ns.company_news, [], "지씨셀 뉴스", warnings)
-    nbi_news = _safe(lambda: ns.nbi_news(3, exclude=company_news), [], "NBI 뉴스", warnings)
+    # 뉴스(네이버·구글)는 키움 조회와 동시에 진행. 지씨셀 뉴스와 NBI 뉴스는 따로 가져오고, NBI 쪽에서 겹치는 기사는 제거
+    def _news_pair():
+        cn = _safe(ns.company_news, [], "지씨셀 뉴스", warnings)
+        return cn, _safe(lambda: ns.nbi_news(3, exclude=cn), [], "NBI 뉴스", warnings)
 
-    market_news = _safe(ns.market_news, [], "시황 뉴스", warnings)
-    us_market_news = _safe(ns.us_market_news, [], "뉴욕증시 시황 뉴스", warnings)
-    peers = _safe(lambda: _peers(now, warnings), [], "종목별 주가·수급", warnings)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_news = pool.submit(_news_pair)
+        f_mkt_news = pool.submit(_safe, ns.market_news, [], "시황 뉴스", warnings)
+        f_us_news = pool.submit(_safe, ns.us_market_news, [], "뉴욕증시 시황 뉴스", warnings)
+        # 키움(시세·지수 → 종목별 표)은 요청 제한 때문에 이 스레드에서 순서대로
+        market = _market(now, warnings)
+        peers = _safe(lambda: _peers(now, warnings), [], "종목별 주가·수급", warnings)
+        company_news, nbi_news = f_news.result()
+        market_news, us_market_news = f_mkt_news.result(), f_us_news.result()
 
     data = {
         "updatedAt": now.strftime("%Y-%m-%d %H:%M:%S"),

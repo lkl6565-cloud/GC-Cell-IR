@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from urllib.parse import urlparse
@@ -255,8 +256,20 @@ def sector_index(kw, mrkt_tp, inds_cd):
     return {"value": f"{abs(price):,.2f}", "ratio": pct_str(ratio)}
 
 
+_SECTOR_NAMES = {}  # 업종코드 목록은 거의 바뀌지 않으므로 프로세스 동안 캐시 (새로고침마다 재조회 방지)
+
+
 def sector_names(kw, mrkt_tp):
     """ka10101(업종코드 리스트) -> {업종코드: 업종명}"""
+    if mrkt_tp in _SECTOR_NAMES:
+        return _SECTOR_NAMES[mrkt_tp]
+    out = _sector_names_fetch(kw, mrkt_tp)
+    if out:
+        _SECTOR_NAMES[mrkt_tp] = out
+    return out
+
+
+def _sector_names_fetch(kw, mrkt_tp):
     d = kw.post("/api/dostk/stkinfo", "ka10101", {"mrkt_tp": mrkt_tp})
     out = {}
     for v in d.values():
@@ -609,7 +622,7 @@ def ai_analysis(data):
     if time.time() < _AI_CACHE["fail_until"]:
         raise RuntimeError("AI 요약 한도 초과로 잠시 중지 중 (자동 문구 사용)")
     try:
-        client = genai.Client(api_key=key, http_options={"timeout": 60000})
+        client = genai.Client(api_key=key, http_options={"timeout": int(os.environ.get("AI_TIMEOUT_MS") or 20000)})
     except Exception:  # noqa: BLE001
         client = genai.Client(api_key=key)
     try:
@@ -714,24 +727,34 @@ def collect_market(kw, now):
     """시세·수급·지수를 새로 수집. kw=None 이면 키움 항목은 건너뛰고(시세 '-'), 나머지는 계속 만든다.
     kw 가 있는데 시세 조회가 실패하면 예외를 던진다 -> 호출부가 토큰을 다시 받아 재시도."""
     ymd = now.strftime("%Y%m%d")
+    # 키움을 쓰지 않는 조회는 별도 스레드에서 동시에 시작 (키움은 요청 제한 때문에 순서대로)
+    pool = ThreadPoolExecutor(max_workers=5)
+    side = {
+        "dart": pool.submit(safe, lambda: dart_disclosures(now), None, "DART 공시"),
+        "nbi": pool.submit(safe, nbi_index, None, "NBI"),
+        "xbi": pool.submit(safe, xbi_index, None, "XBI"),
+        "us10y": pool.submit(safe, us10y, None, "미국 10년물"),
+        "usdKrw": pool.submit(safe, usd_krw, None, "원/달러"),
+    }
     st = price_block(kw, now) if kw is not None else {
         "price": "-", "ratio": "-", "volume": "-", "marketStatus": "시세 조회 실패"}
     rows = safe(lambda: investor_rows(kw, ymd), None, "수급(ka10059)") if kw is not None else None
     inv = safe(lambda: investor_block(rows), None, "수급 집계") if rows else None
     if inv:
         st["investor"] = inv
-    st["disclosures"] = safe(lambda: dart_disclosures(now), None, "DART 공시")
+    st["disclosures"] = side["dart"].result()
 
     macro = {
-        "nbi": safe(nbi_index, None, "NBI"),
-        "xbi": safe(xbi_index, None, "XBI"),
-        "us10y": safe(us10y, None, "미국 10년물"),
+        "nbi": side["nbi"].result(),
+        "xbi": side["xbi"].result(),
+        "us10y": side["us10y"].result(),
         "kq26": safe(lambda: kq26_quote(kw), None, "코스닥 제약(KQ26)"),
         "krxHc": safe(lambda: krx_healthcare_quote(kw), None, "KRX 헬스케어"),
         "kospi": safe(lambda: sector_index(kw, "0", "001"), None, "코스피") if kw is not None else None,
         "kosdaq": safe(lambda: sector_index(kw, "1", "101"), None, "코스닥") if kw is not None else None,
-        "usdKrw": safe(usd_krw, None, "원/달러"),
+        "usdKrw": side["usdKrw"].result(),
     }
+    pool.shutdown(wait=False)
     day = rows[0]["dt"] if rows else ymd
     return {
         "tradingDate": f"{day[:4]}-{day[4:6]}-{day[6:]}",
