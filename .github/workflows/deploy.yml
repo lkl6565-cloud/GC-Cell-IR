@@ -1,0 +1,37 @@
+# main 에 push 하면 카페24 서버에 접속해 deploy.sh 실행 (수동 실행: Actions > Deploy to Cafe24 > Run workflow)
+# 필요 Secrets (Settings > Secrets and variables > Actions):
+#   CAFE24_HOST      서버 주소 (예: lkl6565.mycafe24.com)
+#   CAFE24_USER      접속 계정 (예: root)
+#   CAFE24_PASSWORD  접속 비밀번호  (또는 CAFE24_SSH_KEY 에 개인키)
+#   CAFE24_PORT      SSH 포트 (없으면 22)
+#   LAW_OC           국가법령정보센터 OC (선택)
+name: Deploy to Cafe24
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cafe24
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: SSH 접속 후 deploy.sh 실행
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          LAW_OC: ${{ secrets.LAW_OC }}
+        with:
+          host: ${{ secrets.CAFE24_HOST }}
+          username: ${{ secrets.CAFE24_USER }}
+          password: ${{ secrets.CAFE24_PASSWORD }}
+          key: ${{ secrets.CAFE24_SSH_KEY }}
+          port: ${{ secrets.CAFE24_PORT || 22 }}
+          command_timeout: 8m
+          envs: LAW_OC
+          script: |
+            cd /root/gc-cell-project && LAW_OC="$LAW_OC" bash deploy.sh
