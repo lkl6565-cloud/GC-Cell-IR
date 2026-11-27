@@ -153,10 +153,40 @@ def build_payload():
         "peerTable": peers,
         "macroIndices": market["macroIndices"],
     }
-    ai = _safe(lambda: md.ai_analysis(data), None, "AI 요약", warnings)
-    data["analysis"] = {**(ai or md.analysis_block(data)), "is_ai": bool(ai)}
+    # AI 요약은 화면을 기다리게 하지 않도록 백그라운드에서 만든다.
+    # 우선 숫자 기반 자동 문구로 응답하고, AI 가 끝나면 캐시 데이터의 analysis 를 교체 → 화면이 잠시 뒤 다시 불러감
+    data["analysis"] = {**md.analysis_block(data), "is_ai": False, "ai_pending": True}
     data["warnings"] = warnings
+    _start_ai(data)
     return data
+
+
+_ai_running = threading.Lock()
+
+
+def _start_ai(data):
+    if not _ai_running.acquire(blocking=False):  # 이미 요약 중이면 그 결과를 기다림 (중복 호출 방지)
+        data["analysis"]["ai_pending"] = False
+        return
+
+    def run():
+        t0 = time.time()
+        try:
+            ai = md.ai_analysis(data)
+            if ai:
+                data["analysis"] = {**ai, "is_ai": True, "ai_pending": False}
+                print(f"AI 요약 완료 ({time.time() - t0:.1f}초)")
+            else:
+                data["analysis"]["ai_pending"] = False
+        except Exception as e:  # noqa: BLE001
+            msg = f"AI 요약 실패({time.time() - t0:.1f}초): {str(e)[:160]}"
+            print(f"[경고] {msg}")
+            data["warnings"].append(msg)
+            data["analysis"]["ai_pending"] = False
+        finally:
+            _ai_running.release()
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 # 방문할 때마다 외부 API 를 부르지 않도록 짧게 캐시

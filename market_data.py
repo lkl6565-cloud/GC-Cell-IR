@@ -526,6 +526,7 @@ def _gemini_generate(client, prompt):
     from google.genai import types
 
     model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL_DEFAULT
+    print(f"AI 요약 호출: {model}")
     try:
         cfg = types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0), temperature=0.2)
         return client.models.generate_content(model=model, contents=prompt, config=cfg)
@@ -644,7 +645,7 @@ def ai_analysis(data):
         why = _AI_CACHE.get("fail_why") or "일시 오류"
         raise RuntimeError(f"AI 요약 {why}로 잠시 중지 중 (자동 문구 사용)")
     try:
-        client = genai.Client(api_key=key, http_options={"timeout": int(os.environ.get("AI_TIMEOUT_MS") or 20000)})
+        client = genai.Client(api_key=key, http_options={"timeout": int(os.environ.get("AI_TIMEOUT_MS") or 90000)})
     except Exception:  # noqa: BLE001
         client = genai.Client(api_key=key)
     try:
