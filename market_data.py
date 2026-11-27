@@ -517,6 +517,26 @@ AI_COOLDOWN = 600  # 429 이후 10분간 AI 호출 중지
 AI_LIVE_INTERVAL = 300  # 장중 AI 재호출 최소 간격(초)
 
 
+GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
+
+
+def _gemini_generate(client, prompt):
+    """요약은 짧은 정리 작업이라 '생각(thinking)' 단계를 끈다 → 응답 수 초 내 (켜져 있으면 시간 초과 504 발생).
+    모델이 thinking 설정을 지원하지 않으면 설정 없이 다시 호출."""
+    from google.genai import types
+
+    model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL_DEFAULT
+    try:
+        cfg = types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0), temperature=0.2)
+        return client.models.generate_content(model=model, contents=prompt, config=cfg)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if not any(k in msg for k in ("400", "INVALID_ARGUMENT", "thinking", "Thinking")):
+            raise
+        print(f"[경고] {model} thinking 끄기 미지원 -> 기본 설정으로 재호출: {msg[:120]}", file=sys.stderr)
+        return client.models.generate_content(model=model, contents=prompt)
+
+
 def ai_analysis(data):
     """실제 수집된 데이터만 근거로 3줄 요약. 키/라이브러리가 없으면 None (-> 숫자 기반 자동 문구)."""
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -565,6 +585,7 @@ def ai_analysis(data):
         },
         "2_업계": {
             "코스닥 제약(KQ26)": idx("kq26"),
+            "KRX 헬스케어": idx("krxHc"),
             "나스닥 바이오(NBI, 미국 전일 장 기준)": idx("nbi"),
             "미국 XBI(중소형 바이오 ETF, 미국 전일 장 기준)": idx("xbi"),
             "NBI 관련 기사 제목": [n["title"] for n in data["nbiNews"]] or "관련 기사 없음",
@@ -597,7 +618,7 @@ def ai_analysis(data):
         "[관련 뉴스 \"~\"] 표기로만 붙입니다. 지수 대비 상대강도가 제공되면 코스닥 대비 강/약을 한 구절로 덧붙이고, "
         "녹십자 계열 종목 등락률이 제공되면 계열 전반이 같은 방향인지 다른 방향인지만 사실대로 덧붙입니다. "
         "최근 7일 공시가 제공되면 [관련 공시 \"~\"] 표기로 한 번만 붙이고, 공시 내용·영향은 추정하지 않습니다.\n"
-        "2) supply(업계): 코스닥 제약(KQ26)과 나스닥 바이오(NBI)·XBI의 등락률을 함께 짚어 업계 흐름을 요약하고, "
+        "2) supply(업계): 코스닥 제약(KQ26)·KRX 헬스케어와 나스닥 바이오(NBI)·XBI의 등락률을 함께 짚어 업계 흐름을 요약하고, "
         "NBI 기사 제목에 근거가 있으면 [관련 뉴스 \"~\"] 표기로 덧붙입니다. 두 지수의 방향이 다르면 그 점을 그대로 씁니다. "
         "NBI는 미국 전일 장 기준이므로 '미국 전일 장 기준 NBI'처럼 시차를 밝힙니다.\n"
         "3) macro(매크로): 코스피·코스닥의 종가 지수와 등락률을 먼저 쓰고, 원/달러 환율(값·전일 대비)과 미국 10년물 금리(값·전일 대비, 미국 전일 장 기준)를 덧붙인 뒤, "
@@ -620,18 +641,20 @@ def ai_analysis(data):
         return dict(_AI_CACHE["out"])
     # 한도 초과(429) 직후에는 잠시 호출을 멈춘다
     if time.time() < _AI_CACHE["fail_until"]:
-        raise RuntimeError("AI 요약 한도 초과로 잠시 중지 중 (자동 문구 사용)")
+        why = _AI_CACHE.get("fail_why") or "일시 오류"
+        raise RuntimeError(f"AI 요약 {why}로 잠시 중지 중 (자동 문구 사용)")
     try:
         client = genai.Client(api_key=key, http_options={"timeout": int(os.environ.get("AI_TIMEOUT_MS") or 20000)})
     except Exception:  # noqa: BLE001
         client = genai.Client(api_key=key)
     try:
-        resp = client.models.generate_content(model=os.environ.get("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
+        resp = _gemini_generate(client, prompt)
     except Exception as e:  # noqa: BLE001
         msg = str(e)
         if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-            _AI_CACHE["fail_until"] = time.time() + AI_COOLDOWN
+            _AI_CACHE["fail_until"], _AI_CACHE["fail_why"] = time.time() + AI_COOLDOWN, "한도 초과"
         elif any(k in msg for k in ("504", "DEADLINE", "503", "UNAVAILABLE", "timed out", "Timeout")):
+            _AI_CACHE["fail_why"] = "응답 지연"
             _AI_CACHE["fail_until"] = time.time() + 120  # 시간 초과·일시 장애: 2분간 재호출 중지 (새로고침마다 대기 방지)
         raise
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
@@ -674,7 +697,7 @@ def analysis_block(data):
     fx = m.get("usdKrw") or {}
     return {
         "internal": internal,
-        "supply": f"코스닥 제약(KQ26) {g('kq26')}, 미국 전일 장 기준 나스닥 바이오(NBI) {g('nbi')}였음.",
+        "supply": f"코스닥 제약(KQ26) {g('kq26')}, KRX 헬스케어 {g('krxHc')}, 미국 전일 장 기준 나스닥 바이오(NBI) {g('nbi')}였음.",
         "macro": f"코스피 {g('kospi')}, 코스닥 {g('kosdaq')}였음."
         + (f" 원/달러 {fx.get('value')}원(전일 대비 {fx.get('change')})." if fx.get("value") else "")
         + (f' [관련 뉴스 "{data["marketNews"][0]["title"]}"]' if data.get("marketNews") else ""),

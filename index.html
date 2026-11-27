@@ -475,7 +475,7 @@
             const lines = [
                 `당사 ${label} ${s.price || '-'}(${arrowPct(s.ratio)}), 거래량 ${s.volume || '-'}${vr !== null ? `(20일 평균 대비 ${vr.toFixed(1)}배)` : ''}`,
                 inv.foreign !== undefined ? `수급: 외국인 ${inv.foreign} / 기관 ${inv.organ} / 개인 ${inv.personal}` : '수급: 데이터 없음',
-                `${idx('코스닥 제약', m.kq26)}, ${idx('NBI', m.nbi)}`,
+                `${idx('코스닥 제약', m.kq26)}, ${idx('KRX 헬스케어', m.krxHc)}, ${idx('NBI', m.nbi)}`,
                 `${idx('코스닥', m.kosdaq)}, ${idx('코스피', m.kospi)}`,
             ];
             list.innerHTML = lines.map((t) => `<li>- ${color(t)}</li>`).join('');
